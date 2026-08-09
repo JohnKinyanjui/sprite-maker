@@ -36,6 +36,14 @@ The project is open source, local first, and built with Tauri, Svelte, Rust, and
   <img src="docs/media/animation-editor.gif" alt="An eight-frame character walk cycle playing in Sprite Studio's animation editor" width="980">
 </p>
 
+### Characters are not the only moving assets
+
+Creature harnesses preserve segmented bodies, leg waves, silhouettes, and ground contact across a full loop. This cave centipede uses 12 distinct crawl frames at 12 FPS.
+
+<p align="center">
+  <img src="docs/media/centipede-crawl.gif" alt="A twelve-frame cave centipede crawl loop playing in Sprite Studio's animation editor" width="1164">
+</p>
+
 ## What works today
 
 - Project workspaces with typed **Character**, **Creature**, **Game Object**, **Environment**, **Tileset**, **UI**, and **VFX** worktrees
