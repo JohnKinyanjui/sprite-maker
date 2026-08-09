@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 144" role="img" aria-labelledby="title desc">
+  <title id="title">Sprite Studio</title>
+  <desc id="desc">Sprite Studio logo and wordmark.</desc>
+  <rect width="640" height="144" rx="24" fill="#111212"/>
+  <g transform="translate(28 24)">
+    <g fill="none" stroke="#F5A524" stroke-width="8" stroke-linecap="square">
+      <path d="M30 16H16v14M66 16h14v14M80 66v14H66M30 80H16V66"/>
+    </g>
+    <g fill="#F4F4F5">
+      <rect x="29" y="32" width="14" height="14" rx="2"/>
+      <rect x="29" y="51" width="14" height="14" rx="2"/>
+      <rect x="48" y="51" width="14" height="14" rx="2"/>
+    </g>
+    <path fill="#8B5CF6" d="M58 28l3.2 9.8L71 41l-9.8 3.2L58 54l-3.2-9.8L45 41l9.8-3.2z"/>
+  </g>
+  <text x="148" y="70" fill="#F4F4F5" font-family="Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="39" font-weight="650" letter-spacing="-1.4">Sprite Studio</text>
+  <text x="150" y="101" fill="#8A8B8E" font-family="Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="500" letter-spacing=".6">LOCAL-FIRST GAME ASSET WORKBENCH</text>
+</svg>

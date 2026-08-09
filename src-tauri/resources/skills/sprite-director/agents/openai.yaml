@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sprite Director"
+  short_description: "Infer and render production-ready pixel sprites"
+  default_prompt: "Use $sprite-director to create an original game-ready pixel sprite from my description."

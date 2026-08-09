@@ -1,0 +1,54 @@
+export type Workspace = { id: string; name: string; path: string; createdAt: string; lastOpenedAt: string };
+export type WorktreeKind = "general" | "character" | "environment" | "creature" | "object" | "tileset" | "animation" | "vfx" | "ui";
+export type Worktree = { id: string; projectId: string; name: string; slug: string; kind: WorktreeKind; description?: string; createdAt: string; updatedAt: string };
+export type Conversation = { id: string; workspaceId: string; worktreeId?: string; title: string; provider: string; providerSessionId?: string; createdAt: string; updatedAt: string; archivedAt?: string };
+export type Message = { id: string; conversationId: string; role: "user" | "assistant" | "system"; kind: string; content: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; metadata: Record<string, unknown>; createdAt: string };
+export type Asset = { id: string; workspaceId: string; name: string; path: string; relativePath: string; category: string; format: string; width: number; height: number; fileSize: number; hasAlpha: boolean; createdAt: string };
+export type AssetVersion = { id: string; assetId: string; versionNumber: number; parentVersionId?: string; generationId?: string; path: string; format: string; width: number; height: number; fileSize: number; hasAlpha: boolean; contentHash: string; changeKind: string; available: boolean; selected: boolean; createdAt: string };
+export type ReferenceCategory = "character_appearance" | "clothing" | "face" | "weapon" | "pose" | "art_style" | "environment" | "palette" | "animation" | "vfx" | "anatomy" | "lighting" | "other";
+export type ReferenceImage = { id: string; projectId: string; worktreeId: string; name: string; path: string; relativePath: string; category: ReferenceCategory; notes?: string; format: string; width: number; height: number; fileSize: number; contentHash: string; createdAt: string; updatedAt: string };
+export type AnimationFrame = { assetId: string; durationMs?: number };
+export type Animation = { id: string; workspaceId: string; worktreeId?: string; name: string; fps: number; looping: boolean; frames: AnimationFrame[]; motionPlan?: MotionPlan; createdAt: string; updatedAt: string };
+export type AnimationInput = Omit<Animation, "id" | "createdAt" | "updatedAt"> & { id?: string };
+export type AnimationTemplatePhase = { id: string; templateId: string; position: number; name: string; description: string; frameCount: number; timingWeight: number; movementOffsetX: number; movementOffsetY: number; weaponPosition?: string; poseReferenceId?: string };
+export type AnimationTemplate = { id: string; projectId: string; sourceAnimationId?: string; name: string; intent: string; motionDescription: string; direction: string; looping: boolean; fps: number; width: number; height: number; pivotX?: number; pivotY?: number; frameMode: FrameMode; preferredFrames: number; minFrames: number; maxFrames: number; generationPrompt: string; negativePrompt: string; weaponBehavior?: string; phases: AnimationTemplatePhase[]; createdAt: string; updatedAt: string };
+export type TemplateApplication = { template: AnimationTemplate; targetAsset: Asset; motionPlan: MotionPlan; prompt: string };
+export type ProviderMode = { id: string; label: string; description: string; defaultReasoningEffort: string; reasoningEfforts: string[] };
+export type ProviderCapabilities = { textInput: boolean; imageInput: boolean; multipleImageInput: boolean; imageEditing: boolean; masks: boolean; transparency: boolean; structuredOutput: boolean; videoAnimation: boolean; imageToImage: boolean; maximumReferenceImages: number };
+export type ProviderStatus = { id: string; name: string; kind: "agent" | "image"; installed: boolean; executable?: string; status: string; detail: string; modes: ProviderMode[]; capabilities: ProviderCapabilities };
+export type GenerationQuality = "low" | "mid" | "high" | "custom";
+export type FrameMode = "fixed" | "auto";
+export type ChatGenerationProfile = { quality: GenerationQuality; width: number; height: number; frames: number; fps: number; frameMode: FrameMode; minFrames: number; maxFrames: number; allowInterpolation: boolean; allowAutoAdjust: boolean; model: string; reasoningEffort: string };
+export type SpriteSlashCommand = "animate" | "sprite" | "character" | "effect";
+export type ProviderRequestOptions = { model?: string; reasoningEffort?: string; command?: SpriteSlashCommand; generation: Pick<ChatGenerationProfile, "quality" | "width" | "height" | "frames" | "fps" | "frameMode" | "minFrames" | "maxFrames" | "allowInterpolation" | "allowAutoAdjust">; referenceIds?: string[] };
+export type MotionPhase = { name: string; description: string; frameCount: number; timingWeight: number };
+export type MotionPlan = { frameMode: FrameMode; selectedFrameCount: number; minimumFrameCount: number; maximumFrameCount: number; fps: number; looping: boolean; allowInterpolation: boolean; allowAutoAdjust: boolean; explanation: string; phases: MotionPhase[] };
+export type ProviderEvent = { requestId: string; conversationId: string; eventType: "started" | "content" | "activity" | "completed" | "failed" | "cancelled"; content: string };
+export type GenerationManifest = { name: string; category: string; fps: number; files: string[]; generatedAt: string };
+export type SpriteGenerationMetadata = { kind: "sprite-generation"; name: string; category: string; fps: number; assetIds: string[]; animationId?: string };
+export type ExportResult = { pngPath: string; metadataPath: string; width: number; height: number };
+export type JobStatus = "queued" | "running" | "analyzing" | "completed" | "failed" | "cancelled";
+export type BackgroundJob = { id: string; projectId: string; worktreeId?: string; kind: string; targetType?: string; targetId?: string; status: JobStatus; progress: number; stage: string; errorMessage?: string; cancelRequested: boolean; resultPath?: string; createdAt: string; startedAt?: string; completedAt?: string; updatedAt: string };
+export type JobEvent = { job: BackgroundJob };
+export type SpriteSheetLayout = "horizontal" | "vertical" | "grid";
+export type FrameAlignment = "top_left" | "center" | "bottom_center";
+export type SpriteSheet = { id: string; projectId: string; worktreeId?: string; animationId: string; name: string; layout: SpriteSheetLayout; frameWidth: number; frameHeight: number; padding: number; spacing: number; rows: number; columns: number; scale: number; transparent: boolean; alignment: FrameAlignment; pivotX: number; pivotY: number; pngPath: string; metadataPath: string; width: number; height: number; frameCount: number; createdAt: string; updatedAt: string };
+export type SpriteSheetInput = { projectId: string; worktreeId?: string; animationId: string; name: string; layout: SpriteSheetLayout; frameWidth: number; frameHeight: number; padding: number; spacing: number; columns: number; scale: number; transparent: boolean; alignment: FrameAlignment; pivotX: number; pivotY: number };
+export type VfxEffectType = "fire" | "explosion" | "magic" | "slash" | "smoke";
+export type VfxBlendMode = "normal" | "add" | "screen" | "multiply";
+export type VfxEffect = { id: string; projectId: string; worktreeId: string; animationId?: string; name: string; effectType: VfxEffectType; blendMode: VfxBlendMode; centerX: number; centerY: number; opacity: number; looping: boolean; fps: number; createdAt: string; updatedAt: string };
+export type ProceduralVfxInput = { projectId: string; worktreeId: string; name: string; effectType: VfxEffectType; blendMode: VfxBlendMode; width: number; height: number; frames: number; fps: number; looping: boolean; seed: number };
+export type QualitySeverity = "info" | "warning" | "error";
+export type QualityCheck = { id: string; reportId: string; position: number; checkType: string; frameIndex?: number; comparisonFrameIndex?: number; severity: QualitySeverity; score: number; message: string; metricValue?: number; metricUnit?: string; repairAction?: string; acknowledged: boolean; ignored: boolean; createdAt: string };
+export type QualityReport = { id: string; projectId: string; worktreeId?: string; animationId: string; jobId?: string; status: "running" | "completed" | "failed" | "cancelled"; overallScore: number; characterConsistencyScore: number; motionContinuityScore: number; frameAlignmentScore: number; weaponConsistencyScore: number; loopQualityScore: number; transparencyScore: number; frameCount: number; analyzerVersion: string; checks: QualityCheck[]; createdAt: string; completedAt?: string; updatedAt: string };
+export type FrameOptimizationResult = { animation: Animation; removedFrames: number; insertedFrames: number; summary: string };
+
+export type StudioError = { code: string; message: string };
+
+export function errorMessage(error: unknown): string {
+  if (typeof error === "string") {
+    try { return (JSON.parse(error) as StudioError).message ?? error; } catch { return error; }
+  }
+  if (error && typeof error === "object" && "message" in error) return String(error.message);
+  return "Something unexpected happened";
+}

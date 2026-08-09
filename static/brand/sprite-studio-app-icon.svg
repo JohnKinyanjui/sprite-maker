@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Sprite Studio app icon</title>
+  <desc id="desc">A sprite frame containing three pixels and a motion sparkle on charcoal.</desc>
+  <defs>
+    <linearGradient id="surface" x1="120" y1="80" x2="880" y2="944" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#222323"/>
+      <stop offset="1" stop-color="#0C0D0D"/>
+    </linearGradient>
+  </defs>
+  <rect x="56" y="56" width="912" height="912" rx="218" fill="url(#surface)"/>
+  <rect x="57" y="57" width="910" height="910" rx="217" fill="none" stroke="#FFFFFF" stroke-opacity=".1" stroke-width="2"/>
+  <g fill="none" stroke="#F5A524" stroke-width="74" stroke-linecap="square">
+    <path d="M350 242H242v108M674 242h108v108M782 674v108H674M350 782H242V674"/>
+  </g>
+  <g fill="#F4F4F5">
+    <rect x="365" y="384" width="118" height="118" rx="16"/>
+    <rect x="365" y="542" width="118" height="118" rx="16"/>
+    <rect x="523" y="542" width="118" height="118" rx="16"/>
+  </g>
+  <path fill="#8B5CF6" d="M604 344l29 89 89 29-89 29-29 89-29-89-89-29 89-29z"/>
+</svg>

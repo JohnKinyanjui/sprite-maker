@@ -1,0 +1,144 @@
+<script lang="ts">
+  import { ArrowUp, Bot, Square, Sparkles, Terminal, Paperclip, AlertTriangle, Check, ChevronDown, X, WandSparkles, Clapperboard, Image, UserRound, Zap, BookImage } from "lucide-svelte";
+  import SpriteArtifactCard from "$lib/components/SpriteArtifactCard.svelte";
+  import StylePicker from "$lib/components/StylePicker.svelte";
+  import GenerationProfileMenu from "$lib/components/GenerationProfileMenu.svelte";
+  import { SLASH_COMMANDS } from "$lib/generation-profiles";
+  import { stylePreset, type ConversationStyleId, type StylePresetId } from "$lib/style-presets";
+  import type { Animation, Asset, ChatGenerationProfile, Conversation, Message, ProviderStatus, ReferenceImage, SpriteGenerationMetadata } from "$lib/types";
+
+  let { conversation, messages, provider, runningRequestId, activity, selectedAsset, assets, animations, references, activeReferenceIds, draftPrompt="", workspaceStyle, conversationStyle, generationProfile, onSend, onCancel, onClearAsset, onEditAsset, onEditAnimation, onExportAsset, onExportAnimation, onConversationStyle, onGenerationProfile, onDraftConsumed }: {
+    conversation?: Conversation; messages: Message[]; provider?: ProviderStatus; runningRequestId?: string; activity: string[]; selectedAsset?: Asset; assets: Asset[]; animations: Animation[];
+    references: ReferenceImage[]; activeReferenceIds: string[];
+    draftPrompt?: string;
+    workspaceStyle: StylePresetId; conversationStyle: ConversationStyleId; generationProfile: ChatGenerationProfile;
+    onSend: (prompt: string) => Promise<void>; onCancel: () => void; onClearAsset: () => void; onEditAsset: (asset: Asset) => void; onEditAnimation: (animation: Animation) => void; onExportAsset: (asset: Asset) => Promise<void>; onExportAnimation: (animation: Animation) => Promise<void>; onConversationStyle: (style: ConversationStyleId) => void | Promise<void>;
+    onGenerationProfile: (profile: ChatGenerationProfile) => void | Promise<void>;
+    onDraftConsumed: () => void;
+  } = $props();
+  let prompt = $state("");
+  let sending = $state(false);
+  let styleDetails = $state<HTMLDetailsElement>();
+  let textarea = $state<HTMLTextAreaElement>();
+  let messagePane = $state<HTMLDivElement>();
+  let effectiveStyle = $derived(stylePreset(conversationStyle === "inherit" ? workspaceStyle : conversationStyle));
+  let slashQuery = $derived(prompt.startsWith("/") && !prompt.slice(1).includes(" ") ? prompt.slice(1).toLowerCase() : undefined);
+  let matchingCommands = $derived(slashQuery === undefined ? [] : SLASH_COMMANDS.filter(command => command.label.slice(1).startsWith(slashQuery)));
+
+  $effect(()=>{if(draftPrompt){prompt=draftPrompt;onDraftConsumed();requestAnimationFrame(()=>textarea?.focus());}});
+  $effect(()=>{
+    conversation?.id;
+    messages.length;
+    messages.at(-1)?.content;
+    messages.at(-1)?.status;
+    activity.length;
+    requestAnimationFrame(()=>{if(messagePane)messagePane.scrollTop=messagePane.scrollHeight;});
+  });
+
+  async function chooseStyle(value: ConversationStyleId) {
+    await onConversationStyle(value);
+    styleDetails?.removeAttribute("open");
+  }
+
+  async function send() {
+    if (!prompt.trim() || sending || runningRequestId) return;
+    const value = prompt;
+    prompt = "";
+    sending = true;
+    await onSend(value);
+    sending = false;
+  }
+
+  function keydown(event: KeyboardEvent) {
+    if (event.key === "Escape" && matchingCommands.length) { prompt = ""; return; }
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
+  }
+
+  function chooseCommand(label: string) {
+    prompt = `${label} `;
+    requestAnimationFrame(() => textarea?.focus());
+  }
+
+  function commandIcon(id: string) {
+    return id === "animate" ? Clapperboard : id === "sprite" ? Image : id === "character" ? UserRound : Zap;
+  }
+
+  function generationFor(message: Message): SpriteGenerationMetadata | undefined {
+    const value = message.metadata.generation;
+    if (!value || typeof value !== "object" || !("kind" in value) || value.kind !== "sprite-generation") return;
+    return value as SpriteGenerationMetadata;
+  }
+
+  function visibleContent(message: Message, generation?: SpriteGenerationMetadata): string {
+    if (!generation) return message.content;
+    return message.content
+      .replace(/\s*[-·]?\s*\[Frame\s+\d+\]\([^)]+\.png\)/gi, "")
+      .replace(/^The source \[Sprite Studio spec\].*$/gim, "")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+</script>
+
+<section class="conversation-view">
+  <header>
+    <div><h1>{conversation?.title ?? "Agent"}</h1><p>{provider?.name ?? "No provider selected"} · {provider?.status === "ready" ? "Ready" : "Unavailable"}</p></div>
+    <div class="header-actions">
+      {#if conversation}<details class="style-menu" bind:this={styleDetails}><summary><img src={effectiveStyle.thumbnail} alt=""/><span>{effectiveStyle.name}</span><ChevronDown size={12}/></summary><div class="style-popover"><strong>Chat style</strong><p>Override the workspace default for this conversation.</p><StylePicker value={conversationStyle} allowInherit inheritedStyle={workspaceStyle} compact onChange={chooseStyle}/></div></details>{/if}
+      <div class:ready={provider?.status === "ready"} class="status-dot"><span></span>{provider?.status === "ready" ? "Connected" : "Offline"}</div>
+    </div>
+  </header>
+
+  <div class="messages" bind:this={messagePane} aria-live="polite">
+    {#if !conversation}
+      <div class="blank"><Bot size={29} strokeWidth={1.35} /><h2>Start a workspace conversation</h2><p>Create a conversation to work with an installed AI agent in this asset folder.</p></div>
+    {:else if !messages.length}
+      <div class="blank"><Sparkles size={27} strokeWidth={1.4} /><h2>Create a sprite with Codex</h2><p>Describe the game asset you want. Codex will infer practical sprite settings, draw real PNG frames, and show an animated preview directly in the conversation.</p><div class="suggestions"><button class="generate" onclick={() => prompt = "Generate a polished 4-frame 32x32 pixel-art blue knight idle animation with a transparent background."}><WandSparkles size={12}/> Generate animated sprite</button><button onclick={() => prompt = "Generate a 32x32 pixel-art glowing health potion prop with a transparent background."}>Generate one asset</button></div></div>
+    {:else}
+      <div class="message-column">
+        {#each messages as message}
+          {@const generation = generationFor(message)}
+          <article class:user={message.role === "user"} class:failed={message.status === "failed"}>
+            <div class="avatar">{#if message.role === "user"}<span>You</span>{:else}<Bot size={15} />{/if}</div>
+            <div class="message-body">
+              <div class="message-meta"><strong>{message.role === "user" ? "You" : "Codex"}</strong><time>{new Date(message.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</time></div>
+              {#if message.content}<div class="content">{visibleContent(message,generation)}</div>{/if}
+              {#if generation}<SpriteArtifactCard {generation} {assets} {animations} {onEditAsset} {onEditAnimation} {onExportAsset} {onExportAnimation}/>{/if}
+              {#if message.status === "running"}
+                <div class="working"><span class="spinner"></span> Working in workspace</div>
+                {#if activity.length}<div class="activity">{#each activity.slice(-5) as line}<div><Terminal size={12} /><span>{line}</span></div>{/each}</div>{/if}
+              {:else if message.status === "failed"}<div class="message-state"><AlertTriangle size={12} /> Failed</div>
+              {:else if message.status === "cancelled"}<div class="message-state"><X size={12} /> Cancelled</div>
+              {:else if message.role === "assistant"}<div class="message-state subtle"><Check size={11} /> Completed</div>{/if}
+            </div>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <div class="composer-wrap">
+    {#if activeReferenceIds.length}<div class="reference-context"><BookImage size={12}/><span>{activeReferenceIds.length} active reference{activeReferenceIds.length===1?"":"s"}</span>{#each references.filter(reference=>activeReferenceIds.includes(reference.id)).slice(0,3) as reference}<small>{reference.name}</small>{/each}</div>{/if}
+    {#if selectedAsset}<div class="context-chip"><Paperclip size={12} /><span>{selectedAsset.name}.{selectedAsset.format}</span><button onclick={onClearAsset} title="Remove asset context"><X size={11} /></button></div>{/if}
+    <div class="creation-toolbar"><div class="creation-note"><WandSparkles size={11}/><span>Sprite generation</span><kbd>/</kbd><small>commands</small></div>{#if conversation}<GenerationProfileMenu profile={generationProfile} {provider} onChange={onGenerationProfile}/>{/if}</div>
+    <div class="composer-anchor">
+      {#if matchingCommands.length}
+        <div class="slash-menu"><div class="slash-heading"><strong>Sprite commands</strong><span>Choose a workflow</span></div>{#each matchingCommands as command}{@const Icon=commandIcon(command.id)}<button onclick={() => chooseCommand(command.label)}><span><Icon size={15}/></span><div><strong>{command.label}</strong><p>{command.description}</p></div></button>{/each}</div>
+      {/if}
+    <div class="composer" class:disabled={provider?.status !== "ready"}>
+      <textarea bind:this={textarea} bind:value={prompt} onkeydown={keydown} rows="2" disabled={!conversation || provider?.status !== "ready"} placeholder={provider?.status === "ready" ? "Ask for a sprite, or type / for commands…" : "Install Codex CLI to enable agent conversations"}></textarea>
+      <div class="composer-footer"><span><kbd>↵</kbd> send · <kbd>⇧↵</kbd> new line</span>
+        {#if runningRequestId}<button class="stop" onclick={onCancel} title="Stop request"><Square size={12} fill="currentColor" /></button>{:else}<button class="send" onclick={send} disabled={!prompt.trim() || !conversation || provider?.status !== "ready" || sending} title="Send message"><ArrowUp size={15} /></button>{/if}
+      </div>
+    </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .conversation-view{height:100%;min-width:0;display:flex;flex-direction:column;background:var(--bg)}header{height:56px;min-height:56px;box-sizing:border-box;border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;justify-content:space-between}header h1{font-size:15px;margin:0;font-weight:650}header p{font-size:12px;color:var(--faint);margin:4px 0 0}.header-actions{display:flex;align-items:center;gap:13px}.status-dot{display:flex;align-items:center;gap:7px;color:var(--faint);font-size:12px}.status-dot span{width:7px;height:7px;background:#666;border-radius:50%}.status-dot.ready span{background:#58a978;box-shadow:0 0 0 3px #58a9781c}.style-menu{position:relative}.style-menu summary{height:34px;display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:7px;padding:0 9px 0 6px;background:var(--surface);color:var(--muted);font-size:12px;cursor:pointer;list-style:none}.style-menu summary::-webkit-details-marker{display:none}.style-menu summary:hover,.style-menu[open] summary{border-color:var(--border-strong);color:var(--text)}.style-menu summary img{width:28px;height:22px;border-radius:4px;object-fit:cover}.style-popover{position:absolute;z-index:30;top:40px;right:0;width:330px;padding:14px;background:var(--surface);border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 18px 54px #000a}.style-popover>strong{font-size:13px}.style-popover>p{font-size:11px;color:var(--muted);margin:4px 0 0}
+  .messages{flex:1;overflow:auto;padding:40px max(28px,calc((100% - 980px)/2)) 28px}.blank{height:100%;min-height:300px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:var(--faint)}.blank h2{font-size:21px;color:var(--text);margin:18px 0 9px}.blank p{font-size:14px;line-height:1.6;max-width:540px;margin:0}.suggestions{display:flex;gap:9px;margin-top:24px}.suggestions button{border:1px solid var(--border);background:var(--surface);color:var(--muted);font:inherit;font-size:12px;border-radius:7px;padding:9px 13px;cursor:pointer}.suggestions button:hover{border-color:var(--border-strong);background:var(--surface-hover);color:var(--text)}
+  .message-column{display:flex;flex-direction:column;gap:38px}article{display:grid;grid-template-columns:34px minmax(0,1fr);gap:15px}.avatar{width:32px;height:32px;border:1px solid var(--border-strong);border-radius:8px;display:grid;place-items:center;color:var(--muted);background:var(--surface)}article.user .avatar{border:0;background:var(--selected);font-size:12px;color:var(--muted)}.message-meta{display:flex;align-items:center;gap:9px;height:32px}.message-meta strong{font-size:14px}.message-meta time{font-size:12px;color:var(--faint)}.content{white-space:pre-wrap;font-size:16px;line-height:1.62;color:var(--text);padding-top:7px;overflow-wrap:anywhere}.working,.message-state{font-size:12px;color:var(--muted);display:flex;gap:7px;align-items:center;margin-top:10px}.spinner{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--border-strong);border-top-color:var(--accent);animation:spin .8s linear infinite}.activity{margin-top:12px;border-left:1px solid var(--border);padding-left:12px;display:flex;flex-direction:column;gap:7px}.activity div{display:flex;gap:8px;align-items:center;color:var(--faint);font-size:12px}.activity span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.failed .content{color:#df918c}.message-state.subtle{opacity:.66}@keyframes spin{to{transform:rotate(360deg)}}
+  .composer-wrap{padding:0 max(26px,calc((100% - 920px)/2)) 22px}.reference-context{height:28px;display:flex;align-items:center;gap:7px;color:var(--muted);font-size:10px;padding:0 3px}.reference-context :global(svg){color:var(--accent)}.reference-context small{background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:3px 7px;color:var(--faint);max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.creation-toolbar{height:38px;display:flex;align-items:flex-start;justify-content:space-between;padding:0 2px}.creation-note{height:30px;display:flex;align-items:center;gap:7px;color:var(--faint);font-size:12px}.creation-note :global(svg){color:var(--accent)}.creation-note kbd{margin-left:4px}.creation-note small{font-size:10px;color:var(--faint)}.context-chip{display:inline-flex;height:30px;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--border);border-bottom:0;padding:0 9px;margin-left:8px;border-radius:7px 7px 0 0;font-size:12px;color:var(--muted)}.context-chip button{border:0;background:transparent;color:var(--faint);display:grid;place-items:center;padding:0;cursor:pointer}.composer-anchor{position:relative}.composer{border:1px solid var(--border-strong);border-radius:11px;background:var(--composer);box-shadow:0 10px 34px #0003;overflow:hidden}.composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-dim),0 12px 36px #0004}.composer.disabled{opacity:.7}.composer textarea{display:block;width:100%;box-sizing:border-box;resize:none;border:0;outline:0;background:transparent;color:var(--text);font:inherit;font-size:15px;line-height:1.55;padding:16px 17px 6px;min-height:72px}.composer textarea::placeholder{color:var(--faint)}.composer-footer{height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 9px 0 17px}.composer-footer>span{font-size:12px;color:var(--faint)}kbd{font:inherit;border:1px solid var(--border);padding:2px 4px;border-radius:4px}.send,.stop{width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:7px;cursor:pointer}.send{background:var(--text);color:var(--bg)}.send:disabled{opacity:.3;cursor:not-allowed}.stop{background:#a55353;color:white}
+  .slash-menu{position:absolute;z-index:31;left:0;bottom:calc(100% + 8px);width:min(500px,100%);background:var(--surface);border:1px solid var(--border-strong);border-radius:9px;box-shadow:0 18px 54px #000a;padding:6px}.slash-heading{display:flex;align-items:baseline;justify-content:space-between;padding:8px 9px 7px}.slash-heading strong{font-size:11px}.slash-heading span{font-size:10px;color:var(--faint)}.slash-menu button{width:100%;display:grid;grid-template-columns:31px minmax(0,1fr);gap:9px;align-items:center;border:0;border-radius:6px;background:transparent;color:var(--text);padding:8px;text-align:left;cursor:pointer}.slash-menu button:hover{background:var(--surface-hover)}.slash-menu button>span{width:31px;height:31px;display:grid;place-items:center;border:1px solid var(--border);border-radius:6px;color:var(--accent);background:var(--bg)}.slash-menu button strong{font-size:12px}.slash-menu button p{font-size:10px;line-height:1.4;color:var(--muted);margin:3px 0 0}
+</style>
