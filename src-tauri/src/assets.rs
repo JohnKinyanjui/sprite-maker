@@ -215,7 +215,13 @@ pub fn scan_assets(
         })?;
         for entry in registered.filter_map(Result::ok) {
             if !Path::new(&entry.1).is_file() {
-                connection.execute("DELETE FROM assets WHERE id = ?1", [entry.0])?;
+                // Keep the asset row so historical animations and exported sheets retain
+                // their frame identity. The live browser is built from `assets` above, so
+                // missing files stay hidden while their versions become explicitly unavailable.
+                connection.execute(
+                    "UPDATE asset_versions SET available = 0, selected = 0 WHERE asset_id = ?1 AND path = ?2",
+                    params![entry.0, entry.1],
+                )?;
             }
         }
     }

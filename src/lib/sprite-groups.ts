@@ -1,6 +1,6 @@
 import type { Animation, Asset } from "$lib/types";
 
-export type SpriteGroup = { id: string; name: string; category: string; preview: Asset; frames: Asset[]; fps?: number };
+export type SpriteGroup = { id: string; name: string; category: string; preview: Asset; frames: Asset[]; animationId?: string; fps?: number };
 
 export function buildSpriteGroups(assets: Asset[], animations: Animation[]): SpriteGroup[] {
   const byId = new Map(assets.map(asset => [asset.id, asset]));
@@ -11,7 +11,7 @@ export function buildSpriteGroups(assets: Asset[], animations: Animation[]): Spr
     const frames = animation.frames.map(frame => byId.get(frame.assetId)).filter((asset): asset is Asset => Boolean(asset));
     if (frames.length < 2 || frames.some(asset => grouped.has(asset.id))) continue;
     frames.forEach(asset => grouped.add(asset.id));
-    result.push({ id: `animation:${animation.id}`, name: animation.name, category: frames[0].category, preview: frames[0], frames, fps: animation.fps });
+    result.push({ id: `animation:${animation.id}`, name: animation.name, category: frames[0].category, preview: frames[0], frames, animationId: animation.id, fps: animation.fps });
   }
 
   const sequences = new Map<string, Asset[]>();

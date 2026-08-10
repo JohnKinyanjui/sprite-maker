@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { Animation, AnimationInput, AnimationTemplate, Asset, AssetVersion, BackgroundJob, Conversation, ExportResult, FrameOptimizationResult, GenerationManifest, Message, MotionPlan, ProceduralVfxInput, ProviderRequestOptions, ProviderStatus, QualityReport, ReferenceCategory, ReferenceImage, SpriteSheet, SpriteSheetInput, TemplateApplication, VfxEffect, Workspace, Worktree, WorktreeKind } from "$lib/types";
+import type { Animation, AnimationInput, AnimationTemplate, Asset, AssetPack, AssetVersion, BackgroundJob, Conversation, ExportResult, FrameOptimizationResult, GenerationManifest, Message, MotionPlan, ProceduralVfxInput, ProviderRequestOptions, ProviderStatus, QualityReport, ReferenceCategory, ReferenceImage, SpriteSheet, SpriteSheetInput, TemplateApplication, VfxEffect, Workspace, Worktree, WorktreeKind } from "$lib/types";
 
 export const api = {
   listWorkspaces: () => invoke<Workspace[]>("list_workspaces"),
@@ -28,6 +28,7 @@ export const api = {
   planMotion: (prompt: string, generation: ProviderRequestOptions["generation"]) => invoke<MotionPlan>("plan_motion", { prompt, generation }),
   scanAssets: (workspaceId: string) => invoke<Asset[]>("scan_assets", { workspaceId }),
   getGenerationManifest: (workspaceId: string) => invoke<GenerationManifest | null>("get_generation_manifest", { workspaceId }),
+  listAssetPacks: (workspaceId: string) => invoke<AssetPack[]>("list_asset_packs", { workspaceId }),
   importAsset: (workspaceId: string, sourcePath: string, category: string) => invoke<Asset>("import_asset", { workspaceId, sourcePath, category }),
   renameAsset: (id: string, name: string) => invoke<Asset>("rename_asset", { id, name }),
   deleteAsset: (id: string) => invoke<void>("delete_asset", { id }),
@@ -35,6 +36,7 @@ export const api = {
   listAssetVersions: (assetId: string) => invoke<AssetVersion[]>("list_asset_versions", { assetId }),
   listReferenceImages: (worktreeId: string) => invoke<ReferenceImage[]>("list_reference_images", { worktreeId }),
   importReferenceImage: (worktreeId: string, sourcePath: string, category: ReferenceCategory, notes?: string) => invoke<ReferenceImage>("import_reference_image", { worktreeId, sourcePath, category, notes }),
+  importReferenceBytes: (worktreeId: string, fileName: string, bytes: number[], category: ReferenceCategory, notes?: string) => invoke<ReferenceImage>("import_reference_bytes", { worktreeId, fileName, bytes, category, notes }),
   updateReferenceImage: (id: string, name: string, category: ReferenceCategory, notes?: string) => invoke<ReferenceImage>("update_reference_image", { id, name, category, notes }),
   deleteReferenceImage: (id: string) => invoke<void>("delete_reference_image", { id }),
   setConversationReference: (conversationId: string, referenceId: string, active: boolean, strength?: number) => invoke<void>("set_conversation_reference", { conversationId, referenceId, active, strength }),

@@ -11,6 +11,7 @@ export const SLASH_COMMANDS: { id: SpriteSlashCommand; label: string; descriptio
   { id: "sprite", label: "/sprite", description: "Generate one polished static sprite" },
   { id: "character", label: "/character", description: "Route the request through the ImageGen character harness" },
   { id: "effect", label: "/effect", description: "Create an animated game effect" },
+  { id: "pack", label: "/pack", description: "Generate a coordinated set of animals, objects, or other game assets" },
 ];
 
 const bounded = (value: unknown, fallback: number, minimum: number, maximum: number) => {
@@ -19,7 +20,7 @@ const bounded = (value: unknown, fallback: number, minimum: number, maximum: num
 };
 
 export function profileForQuality(quality: Exclude<GenerationQuality, "custom">, current?: ChatGenerationProfile): ChatGenerationProfile {
-  return { quality, ...GENERATION_PRESETS[quality], frameMode: current?.frameMode ?? "fixed", minFrames: current?.minFrames ?? 4, maxFrames: current?.maxFrames ?? 12, allowInterpolation: current?.allowInterpolation ?? false, allowAutoAdjust: current?.allowAutoAdjust ?? false, model: current?.model ?? "", reasoningEffort: current?.reasoningEffort ?? "" };
+  return { profileVersion: 3, quality, ...GENERATION_PRESETS[quality], frameMode: current?.frameMode ?? "auto", minFrames: current?.minFrames ?? 4, maxFrames: current?.maxFrames ?? 32, allowInterpolation: current?.profileVersion && current.profileVersion >= 3 ? current.allowInterpolation : true, allowAutoAdjust: current?.allowAutoAdjust ?? true, model: current?.model ?? "", reasoningEffort: current?.reasoningEffort ?? "" };
 }
 
 export function normalizeGenerationProfile(value: unknown, modes: ProviderMode[] = []): ChatGenerationProfile {
@@ -32,10 +33,12 @@ export function normalizeGenerationProfile(value: unknown, modes: ProviderMode[]
   const reasoningEffort = requestedMode
     ? requestedMode.reasoningEfforts.includes(requestedEffort) ? requestedEffort : requestedMode.defaultReasoningEffort
     : requestedEffort;
-  const frameMode = source.frameMode === "auto" ? "auto" : "fixed";
+  const frameMode = source.frameMode === "fixed" ? "fixed" : "auto";
   const minFrames = bounded(source.minFrames, 4, 1, 32);
-  const maxFrames = bounded(source.maxFrames, 12, minFrames, 32);
+  const isLegacyAutoRange = !source.profileVersion && frameMode === "auto" && minFrames === 4 && Number(source.maxFrames) === 12;
+  const maxFrames = isLegacyAutoRange ? 32 : bounded(source.maxFrames, 32, minFrames, 32);
   return {
+    profileVersion: 3,
     quality,
     width: bounded(source.width, base.width, 8, 512),
     height: bounded(source.height, base.height, 8, 512),
@@ -44,14 +47,14 @@ export function normalizeGenerationProfile(value: unknown, modes: ProviderMode[]
     frameMode,
     minFrames,
     maxFrames,
-    allowInterpolation: Boolean(source.allowInterpolation),
-    allowAutoAdjust: frameMode === "auto" && Boolean(source.allowAutoAdjust),
+    allowInterpolation: source.profileVersion && source.profileVersion >= 3 ? Boolean(source.allowInterpolation) : true,
+    allowAutoAdjust: frameMode === "auto" && (source.allowAutoAdjust ?? true),
     model,
     reasoningEffort,
   };
 }
 
 export function slashCommand(prompt: string): SpriteSlashCommand | undefined {
-  const match = prompt.trimStart().match(/^\/(animate|sprite|character|effect)(?:\s|$)/i);
+  const match = prompt.trimStart().match(/^\/(animate|sprite|character|effect|pack)(?:\s|$)/i);
   return match?.[1].toLowerCase() as SpriteSlashCommand | undefined;
 }

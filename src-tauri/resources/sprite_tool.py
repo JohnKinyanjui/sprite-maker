@@ -145,8 +145,8 @@ def main():
     name = slug(spec.get("name", "sprite"))
     animation_name = spec.get("animation", name.replace("_", " ").title())
     width, height = map(int, spec.get("size", [32, 32]))
-    if not (8 <= width <= 256 and 8 <= height <= 256):
-        fail("sprite size must be between 8 and 256 pixels")
+    if not (8 <= width <= 512 and 8 <= height <= 512):
+        fail("sprite size must be between 8 and 512 pixels")
     frames = spec.get("frames") or [{"name": name, "commands": spec.get("commands", [])}]
     if not (1 <= len(frames) <= 24):
         fail("a generation must contain between 1 and 24 frames")

@@ -34,6 +34,7 @@ fn initialize_workspace(path: &Path) -> CommandResult<()> {
     }
     let metadata = path.join(".sprite-studio");
     std::fs::create_dir_all(&metadata)?;
+    std::fs::create_dir_all(metadata.join("packs"))?;
     let gitignore = metadata.join(".gitignore");
     if !gitignore.exists() {
         std::fs::write(gitignore, "thumbnails/\n")?;
@@ -47,6 +48,18 @@ fn initialize_workspace(path: &Path) -> CommandResult<()> {
     let bundled_rig_tool = include_str!("../resources/sprite_rig.py");
     if !rig_tool.exists() || std::fs::read_to_string(&rig_tool)? != bundled_rig_tool {
         std::fs::write(rig_tool, bundled_rig_tool)?;
+    }
+    let polish_tool = metadata.join("sprite_polish.py");
+    let bundled_polish_tool = include_str!("../resources/sprite_polish.py");
+    if !polish_tool.exists() || std::fs::read_to_string(&polish_tool)? != bundled_polish_tool {
+        std::fs::write(polish_tool, bundled_polish_tool)?;
+    }
+    let terrain_cleanup = metadata.join("terrain_cleanup.py");
+    let bundled_terrain_cleanup = include_str!("../resources/terrain_cleanup.py");
+    if !terrain_cleanup.exists()
+        || std::fs::read_to_string(&terrain_cleanup)? != bundled_terrain_cleanup
+    {
+        std::fs::write(terrain_cleanup, bundled_terrain_cleanup)?;
     }
     Ok(())
 }
@@ -330,6 +343,17 @@ mod tests {
         assert!(std::fs::read_to_string(rig_tool)
             .expect("rig tool should be readable")
             .contains("layered pixel-rig renderer"));
+        let polish_tool = root.join(".sprite-studio/sprite_polish.py");
+        assert!(polish_tool.is_file());
+        assert!(std::fs::read_to_string(polish_tool)
+            .expect("polish tool should be readable")
+            .contains("Normalize one ImageGen frame repair"));
+        let terrain_cleanup = root.join(".sprite-studio/terrain_cleanup.py");
+        assert!(terrain_cleanup.is_file());
+        assert!(std::fs::read_to_string(terrain_cleanup)
+            .expect("terrain cleanup tool should be readable")
+            .contains("Remove accidental magenta chroma fringe"));
+        assert!(root.join(".sprite-studio/packs").is_dir());
         assert!(root.join("assets/characters").is_dir());
         assert!(root.join("assets/creatures").is_dir());
         std::fs::remove_dir_all(root).expect("temporary fixture should be removable");

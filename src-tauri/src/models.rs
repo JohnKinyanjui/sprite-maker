@@ -223,7 +223,7 @@ pub struct ProviderMode {
 }
 
 fn default_frame_mode() -> String {
-    "fixed".into()
+    "auto".into()
 }
 
 fn default_min_frames() -> u32 {
@@ -231,7 +231,11 @@ fn default_min_frames() -> u32 {
 }
 
 fn default_max_frames() -> u32 {
-    12
+    32
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -248,10 +252,28 @@ pub struct GenerationOptions {
     pub min_frames: u32,
     #[serde(default = "default_max_frames")]
     pub max_frames: u32,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub allow_interpolation: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub allow_auto_adjust: bool,
+}
+
+#[cfg(test)]
+mod generation_option_tests {
+    use super::GenerationOptions;
+
+    #[test]
+    fn omitted_frame_policy_defaults_to_full_auto_range() {
+        let options: GenerationOptions =
+            serde_json::from_str(r#"{"quality":"mid","width":64,"height":64,"frames":6,"fps":8}"#)
+                .expect("generation options should deserialize");
+
+        assert_eq!(options.frame_mode, "auto");
+        assert_eq!(options.min_frames, 4);
+        assert_eq!(options.max_frames, 32);
+        assert!(options.allow_auto_adjust);
+        assert!(options.allow_interpolation);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,12 +323,28 @@ pub struct ProviderEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerationManifest {
+    #[serde(default)]
+    pub kind: Option<String>,
     pub name: String,
     pub category: String,
     pub fps: f64,
     pub files: Vec<String>,
     #[serde(alias = "generation_time", alias = "generated_at")]
     pub generated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetPack {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub style: String,
+    pub kind: String,
+    pub files: Vec<String>,
+    #[serde(alias = "created_at")]
+    pub created_at: String,
 }
 
 #[derive(Debug, Deserialize)]

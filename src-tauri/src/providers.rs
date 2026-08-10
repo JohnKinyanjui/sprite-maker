@@ -518,7 +518,7 @@ pub fn start_provider_message(
             "The selected provider cannot accept reference images",
         ));
     }
-    let reference_context = references::prompt_context(
+    let (reference_context, reference_paths) = references::prompt_context(
         &state,
         &conversation_id,
         &options.reference_ids,
@@ -565,6 +565,7 @@ pub fn start_provider_message(
         ),
         model: options.model,
         reasoning_effort: options.reasoning_effort,
+        reference_paths,
         executable,
     };
     tauri::async_runtime::spawn(async move {
@@ -582,6 +583,7 @@ struct ProviderRun {
     prompt: String,
     model: Option<String>,
     reasoning_effort: Option<String>,
+    reference_paths: Vec<String>,
     executable: PathBuf,
 }
 
@@ -595,6 +597,7 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
         prompt,
         model,
         reasoning_effort,
+        reference_paths,
         executable,
     } = run;
     let state = app.state::<AppState>();
@@ -613,10 +616,24 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
             return;
         }
     };
+    if !reference_paths.is_empty() {
+        emit(
+            &app,
+            &request_id,
+            &conversation_id,
+            "activity",
+            format!(
+                "Visually inspecting {} attached image{} before rig planning",
+                reference_paths.len(),
+                if reference_paths.len() == 1 { "" } else { "s" }
+            ),
+        );
+    }
     let arguments = codex_arguments(
         session_id.as_deref(),
         model.as_deref(),
         reasoning_effort.as_deref(),
+        &reference_paths,
     );
     let mut child = match Command::new(executable)
         .args(&arguments)
@@ -675,6 +692,7 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
                         if let Some(text) = text {
                             if !response.is_empty() && !response.ends_with('\n') { response.push('\n'); }
                             response.push_str(&text);
+                            let _ = update_message(&state, &assistant_id, &response, "running");
                             emit(&app, &request_id, &conversation_id, "content", text);
                         }
                         if let Some(activity) = activity { emit(&app, &request_id, &conversation_id, "activity", activity); }
@@ -739,6 +757,7 @@ fn codex_arguments(
     session_id: Option<&str>,
     model: Option<&str>,
     reasoning_effort: Option<&str>,
+    reference_paths: &[String],
 ) -> Vec<String> {
     let mut arguments = if session_id.is_some() {
         vec![
@@ -766,6 +785,9 @@ fn codex_arguments(
             "--config".into(),
             format!("model_reasoning_effort=\"{reasoning_effort}\""),
         ]);
+    }
+    for path in reference_paths {
+        arguments.extend(["--image".into(), path.clone()]);
     }
     if let Some(session_id) = session_id {
         arguments.push(session_id.into());
@@ -800,7 +822,10 @@ fn validate_provider_options(options: &ProviderRequestOptions) -> CommandResult<
         }
     }
     if let Some(command) = options.command.as_deref() {
-        if !matches!(command, "animate" | "sprite" | "character" | "effect") {
+        if !matches!(
+            command,
+            "animate" | "sprite" | "character" | "effect" | "pack"
+        ) {
             return Err(CommandError::new(
                 "invalid_slash_command",
                 "Choose a supported Sprite Studio slash command",
@@ -1154,7 +1179,12 @@ mod tests {
     #[test]
     fn resumes_a_persisted_codex_session() {
         assert_eq!(
-            codex_arguments(Some("session-123"), Some("gpt-5.6-terra"), Some("high")),
+            codex_arguments(
+                Some("session-123"),
+                Some("gpt-5.6-terra"),
+                Some("high"),
+                &[]
+            ),
             [
                 "exec",
                 "--sandbox",
@@ -1170,6 +1200,23 @@ mod tests {
                 "-"
             ]
         );
+    }
+
+    #[test]
+    fn attaches_reference_images_to_new_and_resumed_codex_turns() {
+        let images = vec![
+            "/tmp/master.png".to_string(),
+            "/tmp/palette.webp".to_string(),
+        ];
+        for session in [None, Some("session-123")] {
+            let arguments = codex_arguments(session, None, None, &images);
+            assert!(arguments
+                .windows(2)
+                .any(|pair| pair == ["--image", "/tmp/master.png"]));
+            assert!(arguments
+                .windows(2)
+                .any(|pair| pair == ["--image", "/tmp/palette.webp"]));
+        }
     }
 
     #[test]
@@ -1193,5 +1240,8 @@ mod tests {
             reference_ids: Vec::new(),
         };
         assert!(validate_provider_options(&options).is_ok());
+        let mut pack_options = options;
+        pack_options.command = Some("pack".into());
+        assert!(validate_provider_options(&pack_options).is_ok());
     }
 }

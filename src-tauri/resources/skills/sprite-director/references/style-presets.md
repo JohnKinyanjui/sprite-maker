@@ -7,6 +7,11 @@ Use these only when the user did not specify production dimensions. Treat named 
 | Pixel RPG, cozy farming RPG, 16-bit | 48×64 character | 4-frame gentle idle/walk-ready set | 8 | front or user-specified |
 | Graphic adventure, angular concept art | 192×256 character | 4-frame idle set | 8 | three-quarter/front |
 | Cozy chibi, rounded cartoon | 128×160 character | 4-frame idle set | 8 | front or three-quarter |
+| limited-palette pixel art | 32×32 character or object | 1 static sprite or motion-ready set | 8 | user-specified |
+| 2:1 isometric pixel art | 64×64 object or creature | 1 static sprite | 1 | isometric three-quarter |
+| painterly fantasy | 192×192 object or creature | 1 static sprite | 1 | three-quarter |
+| cel-shaded cartoon | 128×128 object or character | 1 static sprite or 6-frame action set | 10 | side or three-quarter |
+| one-bit monochrome | 32×32 object or creature | 1 static sprite | 1 | strongest silhouette angle |
 | classic top-down adventure | 16×24 character | 4-frame idle/walk-ready set | 8 | down/front |
 | SNES-era action RPG | 24×32 character | 4-frame idle | 10 | three-quarter/front |
 | compact roguelike | 16×16 character | 2-frame idle | 6 | top-down/front hybrid |
@@ -15,12 +20,13 @@ Use these only when the user did not specify production dimensions. Treat named 
 | inventory icon, item, prop | 24×24 prop | 1 frame | 1 | three-quarter icon |
 | UI icon, tiny pickup | 16×16 prop | 1 frame | 1 | centered icon |
 | portrait or dialogue bust | 64×64 character | 1 frame | 1 | front/three-quarter |
-| terrain tile | 16×16 terrain | 1 seamless tile | 1 | top-down |
+| terrain, tilemap, tileset | 384×256 terrain atlas | 1 PNG containing a coherent 32px-grid tile family | 1 | top-down |
 | impact, sparkle, smoke effect | 32×32 effect | 5-frame effect | 12 | centered |
 
 ## Inference rules
 
 - A simple request for a style-inspired character should produce a useful animated set, not ask for size.
+- A style named directly in the user prompt overrides the workspace or chat preset. Preserve the named traits across every asset in a pack.
 - Use the logical canvas dimensions exactly; Sprite Studio previews can scale pixels without changing the source.
 - For a single object or icon, do not invent animation.
 - For walking, running, attacking, idling, spellcasting, or effects, generate multiple frames even when the user omits a frame count.

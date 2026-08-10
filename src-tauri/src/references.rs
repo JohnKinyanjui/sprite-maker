@@ -46,6 +46,30 @@ fn reference_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReferenceImage> {
     })
 }
 
+struct PromptReference {
+    name: String,
+    path: String,
+    category: String,
+    notes: Option<String>,
+    width: u32,
+    height: u32,
+    format: String,
+    content_hash: String,
+}
+
+fn prompt_reference_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PromptReference> {
+    Ok(PromptReference {
+        name: row.get(0)?,
+        path: row.get(1)?,
+        category: row.get(2)?,
+        notes: row.get(3)?,
+        width: row.get(4)?,
+        height: row.get(5)?,
+        format: row.get(6)?,
+        content_hash: row.get(7)?,
+    })
+}
+
 fn select_reference() -> &'static str {
     "SELECT id, project_id, worktree_id, name, path, relative_path, category, notes, format, width, height, file_size, content_hash, created_at, updated_at FROM reference_images"
 }
@@ -61,7 +85,7 @@ fn validate_category(category: &str) -> CommandResult<()> {
     }
 }
 
-fn portable_file_name(path: &Path) -> String {
+fn portable_file_name(path: &Path, extension: &str) -> String {
     let stem = path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -77,11 +101,6 @@ fn portable_file_name(path: &Path) -> String {
         })
         .collect();
     let slug = slug.trim_matches('-');
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("png")
-        .to_ascii_lowercase();
     format!(
         "{}-{}.{}",
         &Uuid::new_v4().simple().to_string()[..8],
@@ -93,6 +112,132 @@ fn portable_file_name(path: &Path) -> String {
 fn file_hash(path: &Path) -> CommandResult<String> {
     let bytes = std::fs::read(path)?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+fn reference_extension(bytes: &[u8]) -> CommandResult<&'static str> {
+    match image::guess_format(bytes)
+        .map_err(|error| CommandError::new("invalid_reference_image", error.to_string()))?
+    {
+        image::ImageFormat::Png => Ok("png"),
+        image::ImageFormat::Jpeg => Ok("jpg"),
+        image::ImageFormat::WebP => Ok("webp"),
+        image::ImageFormat::Gif => Ok("gif"),
+        _ => Err(CommandError::new(
+            "unsupported_reference_format",
+            "Reference images must be PNG, JPEG, WebP, or GIF",
+        )),
+    }
+}
+
+fn store_reference_bytes(
+    worktree_id: String,
+    source_name: String,
+    bytes: Vec<u8>,
+    category: String,
+    notes: Option<String>,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<ReferenceImage> {
+    validate_category(&category)?;
+    if bytes.is_empty() || bytes.len() > 25 * 1024 * 1024 {
+        return Err(CommandError::new(
+            "invalid_reference_size",
+            "Reference images must be between 1 byte and 25 MB",
+        ));
+    }
+    let image = image::load_from_memory(&bytes)
+        .map_err(|error| CommandError::new("invalid_reference_image", error.to_string()))?;
+    let (width, height) = image.dimensions();
+    let format = reference_extension(&bytes)?.to_string();
+    let source = PathBuf::from(if source_name.trim().is_empty() {
+        "pasted-reference"
+    } else {
+        source_name.as_str()
+    });
+    let (project_id, project_path, worktree_slug): (String, String, String) = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+        connection
+            .query_row(
+                r#"SELECT p.id, p.path, w.slug
+                   FROM worktrees w JOIN projects p ON p.id = w.project_id
+                   WHERE w.id = ?1"#,
+                [&worktree_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                CommandError::new("worktree_not_found", "The worktree no longer exists")
+            })?
+    };
+    let project_root = PathBuf::from(&project_path);
+    let reference_directory = project_root
+        .join("worktrees")
+        .join(worktree_slug)
+        .join("references");
+    std::fs::create_dir_all(&reference_directory)?;
+    let destination = reference_directory.join(portable_file_name(&source, &format));
+    std::fs::write(&destination, &bytes)?;
+    app.asset_protocol_scope()
+        .allow_file(&destination)
+        .map_err(|error| CommandError::new("asset_scope_error", error.to_string()))?;
+    let relative_path = destination
+        .strip_prefix(&project_root)
+        .unwrap_or(&destination)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let now = Utc::now().to_rfc3339();
+    let reference = ReferenceImage {
+        id: Uuid::new_v4().to_string(),
+        project_id,
+        worktree_id,
+        name: source
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Pasted reference")
+            .to_string(),
+        path: destination.to_string_lossy().into_owned(),
+        relative_path,
+        category,
+        notes: notes.filter(|value| !value.trim().is_empty()),
+        format,
+        width,
+        height,
+        file_size: bytes.len() as u64,
+        content_hash: file_hash(&destination)?,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    connection.execute(
+        r#"INSERT INTO reference_images(
+            id, project_id, worktree_id, name, path, relative_path, category, notes,
+            format, width, height, file_size, content_hash, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"#,
+        params![
+            reference.id,
+            reference.project_id,
+            reference.worktree_id,
+            reference.name,
+            reference.path,
+            reference.relative_path,
+            reference.category,
+            reference.notes,
+            reference.format,
+            reference.width,
+            reference.height,
+            reference.file_size,
+            reference.content_hash,
+            reference.created_at,
+            reference.updated_at
+        ],
+    )?;
+    Ok(reference)
 }
 
 #[tauri::command]
@@ -128,7 +273,6 @@ pub fn import_reference_image(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<ReferenceImage> {
-    validate_category(&category)?;
     let source = PathBuf::from(&source_path);
     if !source.is_file() {
         return Err(CommandError::new(
@@ -136,99 +280,26 @@ pub fn import_reference_image(
             "The selected reference image no longer exists",
         ));
     }
-    let image = image::open(&source)
-        .map_err(|error| CommandError::new("invalid_reference_image", error.to_string()))?;
-    let (width, height) = image.dimensions();
-    let format = source
-        .extension()
+    let bytes = std::fs::read(&source)?;
+    let source_name = source
+        .file_name()
         .and_then(|value| value.to_str())
-        .unwrap_or("png")
-        .to_ascii_lowercase();
-    let (project_id, project_path, worktree_slug): (String, String, String) = {
-        let connection = state
-            .db
-            .lock()
-            .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
-        connection
-            .query_row(
-                r#"SELECT p.id, p.path, w.slug
-                   FROM worktrees w JOIN projects p ON p.id = w.project_id
-                   WHERE w.id = ?1"#,
-                [&worktree_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?
-            .ok_or_else(|| {
-                CommandError::new("worktree_not_found", "The worktree no longer exists")
-            })?
-    };
-    let project_root = PathBuf::from(&project_path);
-    let reference_directory = project_root
-        .join("worktrees")
-        .join(worktree_slug)
-        .join("references");
-    std::fs::create_dir_all(&reference_directory)?;
-    let destination = reference_directory.join(portable_file_name(&source));
-    std::fs::copy(&source, &destination)?;
-    app.asset_protocol_scope()
-        .allow_file(&destination)
-        .map_err(|error| CommandError::new("asset_scope_error", error.to_string()))?;
-    let metadata = std::fs::metadata(&destination)?;
-    let relative_path = destination
-        .strip_prefix(&project_root)
-        .unwrap_or(&destination)
-        .to_string_lossy()
-        .replace('\\', "/");
-    let now = Utc::now().to_rfc3339();
-    let reference = ReferenceImage {
-        id: Uuid::new_v4().to_string(),
-        project_id,
-        worktree_id,
-        name: source
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("Reference")
-            .to_string(),
-        path: destination.to_string_lossy().into_owned(),
-        relative_path,
-        category,
-        notes: notes.filter(|value| !value.trim().is_empty()),
-        format,
-        width,
-        height,
-        file_size: metadata.len(),
-        content_hash: file_hash(&destination)?,
-        created_at: now.clone(),
-        updated_at: now,
-    };
-    let connection = state
-        .db
-        .lock()
-        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
-    connection.execute(
-        r#"INSERT INTO reference_images(
-            id, project_id, worktree_id, name, path, relative_path, category, notes,
-            format, width, height, file_size, content_hash, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"#,
-        params![
-            reference.id,
-            reference.project_id,
-            reference.worktree_id,
-            reference.name,
-            reference.path,
-            reference.relative_path,
-            reference.category,
-            reference.notes,
-            reference.format,
-            reference.width,
-            reference.height,
-            reference.file_size,
-            reference.content_hash,
-            reference.created_at,
-            reference.updated_at
-        ],
-    )?;
-    Ok(reference)
+        .unwrap_or("reference")
+        .to_string();
+    store_reference_bytes(worktree_id, source_name, bytes, category, notes, app, state)
+}
+
+#[tauri::command]
+pub fn import_reference_bytes(
+    worktree_id: String,
+    file_name: String,
+    bytes: Vec<u8>,
+    category: String,
+    notes: Option<String>,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<ReferenceImage> {
+    store_reference_bytes(worktree_id, file_name, bytes, category, notes, app, state)
 }
 
 #[tauri::command]
@@ -375,7 +446,7 @@ pub fn prompt_context(
     conversation_id: &str,
     reference_ids: &[String],
     maximum: usize,
-) -> CommandResult<String> {
+) -> CommandResult<(String, Vec<String>)> {
     if reference_ids.len() > maximum {
         return Err(CommandError::new(
             "too_many_references",
@@ -387,37 +458,57 @@ pub fn prompt_context(
         .lock()
         .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
     let mut lines = Vec::new();
+    let mut paths = Vec::new();
     for id in reference_ids {
-        let value: Option<(String, String, String, Option<String>)> = connection
+        let reference = connection
             .query_row(
-                r#"SELECT r.name, r.path, r.category, r.notes
+                r#"SELECT r.name, r.path, r.category, r.notes, r.width, r.height, r.format, r.content_hash
                    FROM reference_images r
                    JOIN conversations c ON c.workspace_id = r.project_id
                    WHERE c.id=?1 AND r.id=?2"#,
                 params![conversation_id, id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                prompt_reference_row,
             )
-            .optional()?;
-        let (name, path, category, notes) = value.ok_or_else(|| {
-            CommandError::new(
-                "invalid_conversation_reference",
-                "A selected reference is unavailable in this project",
-            )
-        })?;
+            .optional()?
+            .ok_or_else(|| {
+                CommandError::new(
+                    "invalid_conversation_reference",
+                    "A selected reference is unavailable in this project",
+                )
+            })?;
+        if !Path::new(&reference.path).is_file() {
+            return Err(CommandError::new(
+                "reference_file_missing",
+                format!(
+                    "The reference image {} is missing from disk",
+                    reference.name
+                ),
+            ));
+        }
         lines.push(format!(
-            "- {name} [{category}]: {path}{}",
-            notes
+            "- {} [{}]: {} — {}x{} {}, content hash {}{}",
+            reference.name,
+            reference.category,
+            reference.path,
+            reference.width,
+            reference.height,
+            reference.format,
+            reference.content_hash,
+            reference
+                .notes
                 .filter(|value| !value.trim().is_empty())
                 .map(|value| format!(" — {value}"))
                 .unwrap_or_default()
         ));
+        paths.push(reference.path);
     }
-    Ok(if lines.is_empty() {
+    let text = if lines.is_empty() {
         String::new()
     } else {
         format!(
-            "ACTIVE REFERENCE IMAGES\nInspect these local image files before generation and preserve the requested identity/style/pose roles. Do not copy protected characters or brands.\n{}",
+            "ACTIVE REFERENCE IMAGES (ATTACHED AS REAL IMAGE INPUTS)\nBefore planning, drawing, masking, or rigging, visually inspect every attached image. Report only what is actually visible: subject/object type, facing direction, silhouette, canvas occupancy, transparent bounds, articulated parts, likely joints/pivots, contact points, overlaps, and any ambiguity. Never infer anatomy from the filename or user wording. Base masks and pivots on observed pixel boundaries, and preserve the requested identity/style/pose roles. Do not copy protected characters or brands.\n{}",
             lines.join("\n")
         )
-    })
+    };
+    Ok((text, paths))
 }

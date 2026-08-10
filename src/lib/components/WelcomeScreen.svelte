@@ -1,14 +1,15 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
-  import { FolderOpen, Plus, ArrowRight, HardDrive, Bot, Box } from "lucide-svelte";
+  import { FolderOpen, Plus, ArrowRight, HardDrive, Bot, Box, MoreHorizontal, Pencil, FolderMinus, Trash2, X } from "lucide-svelte";
   import LogoMark from "$lib/components/LogoMark.svelte";
   import { api } from "$lib/api";
   import { errorMessage, type Workspace } from "$lib/types";
 
-  let { workspaces, onOpen, onCreated, onError }: {
+  let { workspaces, onOpen, onCreated, onChanged, onError }: {
     workspaces: Workspace[];
     onOpen: (workspace: Workspace) => void;
     onCreated: (workspace: Workspace) => void;
+    onChanged: () => void | Promise<void>;
     onError: (message: string) => void;
   } = $props();
 
@@ -16,6 +17,9 @@
   let name = $state("");
   let path = $state("");
   let busy = $state(false);
+  let workspaceMenu = $state<string>();
+  let managedWorkspace = $state<Workspace>();
+  let managedName = $state("");
 
   async function chooseCreateDirectory() {
     const selected = await open({ directory: true, multiple: false, title: "Choose a workspace directory" });
@@ -41,6 +45,39 @@
     try { onCreated(await api.openWorkspace(selected)); }
     catch (error) { onError(errorMessage(error)); }
   }
+
+  function manage(workspace: Workspace) {
+    workspaceMenu = undefined;
+    managedWorkspace = workspace;
+    managedName = workspace.name;
+  }
+
+  async function renameManagedWorkspace() {
+    if (!managedWorkspace || !managedName.trim()) return;
+    busy = true;
+    try {
+      await api.renameWorkspace(managedWorkspace.id, managedName.trim());
+      await onChanged();
+      managedWorkspace = undefined;
+    } catch (error) { onError(errorMessage(error)); }
+    finally { busy = false; }
+  }
+
+  async function removeManagedWorkspace(deleteFiles: boolean) {
+    if (!managedWorkspace) return;
+    const question = deleteFiles
+      ? `Permanently delete ${managedWorkspace.name} and every file in its folder? This cannot be undone.`
+      : `Remove ${managedWorkspace.name} from recent workspaces? Its files will stay on disk.`;
+    if (!window.confirm(question)) return;
+    busy = true;
+    try {
+      if (deleteFiles) await api.deleteWorkspace(managedWorkspace.id);
+      else await api.removeWorkspace(managedWorkspace.id);
+      await onChanged();
+      managedWorkspace = undefined;
+    } catch (error) { onError(errorMessage(error)); }
+    finally { busy = false; }
+  }
 </script>
 
 <main class="welcome">
@@ -63,11 +100,19 @@
     {#if workspaces.length}
       <div class="workspace-list">
         {#each workspaces as workspace}
-          <button class="workspace" onclick={() => onOpen(workspace)}>
-            <div class="folder"><FolderOpen size={17} /></div>
-            <div><strong>{workspace.name}</strong><small>{workspace.path}</small></div>
-            <ArrowRight class="arrow" size={16} />
-          </button>
+          <div class="workspace-row">
+            <button class="workspace" onclick={() => onOpen(workspace)}>
+              <div class="folder"><FolderOpen size={17} /></div>
+              <div><strong>{workspace.name}</strong><small>{workspace.path}</small></div>
+              <ArrowRight class="arrow" size={16} />
+            </button>
+            <button class="workspace-more" aria-label={`Manage ${workspace.name}`} title={`Manage ${workspace.name}`} onclick={() => workspaceMenu = workspaceMenu === workspace.id ? undefined : workspace.id}><MoreHorizontal size={15}/></button>
+            {#if workspaceMenu === workspace.id}
+              <div class="workspace-menu">
+                <button onclick={() => manage(workspace)}><Pencil size={12}/>Rename or remove…</button>
+              </div>
+            {/if}
+          </div>
         {/each}
       </div>
     {:else}
@@ -91,6 +136,21 @@
   </div>
 {/if}
 
+{#if managedWorkspace}
+  <div class="backdrop" role="presentation" onclick={(event) => event.target === event.currentTarget && !busy && (managedWorkspace = undefined)}>
+    <form class="dialog manage-dialog" onsubmit={(event) => { event.preventDefault(); renameManagedWorkspace(); }}>
+      <header><div><p class="eyebrow">WORKSPACE</p><h2>Manage workspace</h2></div><button type="button" aria-label="Close" disabled={busy} onclick={() => managedWorkspace = undefined}><X size={15}/></button></header>
+      <label>Name<input bind:value={managedName} /></label>
+      <p class="managed-path">{managedWorkspace.path}</p>
+      <div class="dialog-actions"><button type="button" disabled={busy} onclick={() => managedWorkspace = undefined}>Cancel</button><button class="primary" disabled={busy || !managedName.trim()}>{busy ? "Saving…" : "Rename"}</button></div>
+      <div class="danger-zone">
+        <div><strong>Remove workspace</strong><p>Removing only clears Sprite Studio metadata. Deleting also removes the entire folder.</p></div>
+        <div><button type="button" disabled={busy} onclick={() => removeManagedWorkspace(false)}><FolderMinus size={13}/>Remove from app</button><button type="button" class="danger" disabled={busy} onclick={() => removeManagedWorkspace(true)}><Trash2 size={13}/>Delete folder…</button></div>
+      </div>
+    </form>
+  </div>
+{/if}
+
 <style>
   .welcome{min-height:100vh;display:grid;grid-template-columns:minmax(520px,1.25fr) minmax(340px,.75fr);background:var(--bg);color:var(--text)}
   .intro{padding:clamp(70px,12vh,130px) clamp(56px,8vw,128px);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;border-right:1px solid var(--border)}
@@ -103,9 +163,11 @@
   .principles{display:flex;gap:24px;color:var(--muted);font-size:12px;margin-top:46px}.principles span{display:flex;gap:7px;align-items:center}
   .recent{padding:clamp(60px,10vh,100px) clamp(36px,5vw,70px);display:flex;flex-direction:column;justify-content:center;min-width:0}
   .recent-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.recent-heading h2{font-size:13px;font-weight:600;margin:0}.recent-heading span{font-size:12px;color:var(--faint)}
-  .workspace-list{display:flex;flex-direction:column}.workspace{width:100%;display:grid;grid-template-columns:36px minmax(0,1fr) 16px;gap:11px;text-align:left;align-items:center;padding:12px 8px;border:0;border-top:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer}.workspace:last-child{border-bottom:1px solid var(--border)}.workspace:hover{background:var(--surface-hover)}
+  .workspace-list{display:flex;flex-direction:column}.workspace-row{position:relative;border-top:1px solid var(--border)}.workspace-row:last-child{border-bottom:1px solid var(--border)}.workspace{width:100%;display:grid;grid-template-columns:36px minmax(0,1fr) 16px;gap:11px;text-align:left;align-items:center;padding:12px 42px 12px 8px;border:0;background:transparent;color:var(--text);cursor:pointer}.workspace-row:hover .workspace{background:var(--surface-hover)}
   .workspace .folder{width:34px;height:34px;border:1px solid var(--border);border-radius:6px;display:grid;place-items:center;color:var(--muted)}.workspace strong,.workspace small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.workspace strong{font-size:12px;font-weight:570}.workspace small{font-size:12px;color:var(--faint);margin-top:3px}.workspace :global(.arrow){color:var(--faint)}
+  .workspace-more{position:absolute;z-index:2;right:7px;top:50%;transform:translateY(-50%);width:28px;height:28px;border:0;border-radius:5px;background:transparent;color:var(--faint);display:grid;place-items:center;cursor:pointer;opacity:0}.workspace-row:hover .workspace-more,.workspace-more:focus{opacity:1}.workspace-more:hover{background:var(--selected);color:var(--text)}.workspace-menu{position:absolute;z-index:8;right:6px;top:48px;width:158px;padding:4px;border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);box-shadow:0 14px 38px #0008}.workspace-menu button{width:100%;height:30px;border:0;border-radius:4px;background:transparent;color:var(--muted);display:flex;align-items:center;gap:7px;padding:0 8px;font:inherit;font-size:11px;cursor:pointer}.workspace-menu button:hover{background:var(--selected);color:var(--text)}
   .empty{border:1px dashed var(--border-strong);border-radius:8px;min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--faint);padding:24px}.empty strong{font-size:12px;color:var(--muted);margin-top:12px}.empty p{font-size:12px;line-height:1.5;max-width:230px}
   .backdrop{position:fixed;inset:0;background:#0008;display:grid;place-items:center;z-index:30}.dialog{width:min(460px,calc(100vw - 32px));background:var(--surface);border:1px solid var(--border-strong);box-shadow:0 24px 70px #0007;border-radius:10px;padding:24px;display:flex;flex-direction:column;gap:20px}.dialog h2{font-size:19px;margin:0 0 8px}.dialog p:not(.eyebrow){font-size:12px;line-height:1.5;color:var(--muted);margin:0}.dialog label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:7px}.dialog input{height:38px;box-sizing:border-box;border:1px solid var(--border-strong);border-radius:6px;background:var(--bg);color:var(--text);padding:0 11px;font:inherit;font-size:12px;outline:none}.dialog input:focus{border-color:var(--accent)}.path-field{display:flex;gap:7px}.path-field input{flex:1;min-width:0}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+  .manage-dialog{gap:16px}.manage-dialog>header{display:flex;align-items:flex-start;justify-content:space-between}.manage-dialog>header .eyebrow{margin-bottom:8px}.manage-dialog>header button{width:28px;height:28px;border:0;border-radius:5px;background:transparent;color:var(--faint);display:grid;place-items:center;cursor:pointer}.manage-dialog>header button:hover{background:var(--surface-hover);color:var(--text)}.managed-path{padding:9px 10px;border:1px solid var(--border);border-radius:5px;background:var(--bg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.danger-zone{border-top:1px solid var(--border);padding-top:16px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px}.danger-zone strong{font-size:11px}.danger-zone p{max-width:245px;margin-top:4px!important;font-size:10px!important}.danger-zone>div:last-child{display:flex;gap:6px}.danger-zone button{height:31px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--muted);display:flex;align-items:center;gap:6px;padding:0 8px;font:inherit;font-size:10px;cursor:pointer;white-space:nowrap}.danger-zone button.danger{color:#d27b7b;border-color:#744}.danger-zone button:hover{background:var(--surface-hover);color:var(--text)}
   @media(max-width:850px){.welcome{grid-template-columns:1fr}.intro{border-right:0;border-bottom:1px solid var(--border);padding:60px 36px}.recent{padding:36px}.principles{flex-wrap:wrap}.recent{justify-content:flex-start}}
 </style>

@@ -7,6 +7,7 @@ transforms to those same pixels for every animation frame.
 """
 
 import json
+import hashlib
 import math
 import shutil
 import struct
@@ -199,11 +200,176 @@ def safe_source(workspace, relative):
     return path
 
 
+def finite_number(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        fail(f"{label} must be a finite number")
+    return float(value)
+
+
+def validate_mask(mask, width, height, label):
+    kinds = [kind for kind in ("rect", "polygon") if kind in mask]
+    if len(kinds) != 1:
+        fail(f"{label} requires exactly one rect or polygon mask")
+    if kinds[0] == "rect":
+        values = mask["rect"]
+        if not isinstance(values, list) or len(values) != 4:
+            fail(f"{label} rect must be [x,y,width,height]")
+        left, top, mask_width, mask_height = [finite_number(value, f"{label} rect") for value in values]
+        if mask_width <= 0 or mask_height <= 0:
+            fail(f"{label} rect width and height must be positive")
+        if left < 0 or top < 0 or left + mask_width > width or top + mask_height > height:
+            fail(f"{label} rect extends outside the locked master")
+    else:
+        points = mask["polygon"]
+        if not isinstance(points, list) or len(points) < 3:
+            fail(f"{label} polygon requires at least three points")
+        for point in points:
+            if not isinstance(point, list) or len(point) != 2:
+                fail(f"{label} polygon points must be [x,y]")
+            x = finite_number(point[0], f"{label} polygon x")
+            y = finite_number(point[1], f"{label} polygon y")
+            if x < 0 or y < 0 or x > width or y > height:
+                fail(f"{label} polygon extends outside the locked master")
+
+
+def validate_transform(transform, label, root=False):
+    if not isinstance(transform, dict):
+        fail(f"{label} must be an object")
+    allowed = {"dx", "dy"} if root else {"dx", "dy", "rotate", "scaleX", "scaleY"}
+    unexpected = set(transform) - allowed
+    if unexpected:
+        fail(f"{label} has unsupported keys: {', '.join(sorted(unexpected))}")
+    for key, value in transform.items():
+        number = finite_number(value, f"{label}.{key}")
+        if key in {"scaleX", "scaleY"} and number == 0:
+            fail(f"{label}.{key} cannot be zero")
+
+
+def transform_has_motion(transform):
+    """Return whether a part transform changes its source pose."""
+    return any(
+        abs(float(transform.get(key, default)) - default) > 1e-6
+        for key, default in (("dx", 0), ("dy", 0), ("rotate", 0), ("scaleX", 1), ("scaleY", 1))
+    )
+
+
+def validate_articulated_motion(spec, names, frames):
+    """Reject locomotion rigs that merely translate one rigid sprite."""
+    proposal = spec.get("proposal", {})
+    if not isinstance(proposal, dict):
+        proposal = {}
+    morphology = str(proposal.get("morphologyTag", "")).strip().lower()
+    motion_text = " ".join((
+        str(spec.get("name", "")),
+        str(proposal.get("motionIntent", "")),
+    )).lower()
+    locomotion_verbs = {
+        "walk", "walking", "run", "running", "sprint", "gallop", "trot",
+        "hop", "hopping", "bound", "bounding", "pounce", "crawl", "slither",
+        "swim", "fly", "flap", "takeoff", "take-off",
+    }
+    if morphology not in {
+        "biped", "quadruped", "hexapod", "segmented-many-leg", "serpentine", "winged"
+    } or not any(verb in motion_text for verb in locomotion_verbs):
+        return
+
+    moved_parts = {
+        name
+        for frame in frames
+        for name, transform in frame.get("transforms", {}).items()
+        if name != "base" and transform_has_motion(transform)
+    }
+    if len(moved_parts) < 2:
+        fail(
+            "articulated locomotion cannot be root-only: animate at least two anatomical "
+            "parts independently instead of lifting or sliding the complete sprite"
+        )
+
+    if morphology == "quadruped" and any(
+        verb in motion_text for verb in {"hop", "hopping", "bound", "bounding", "pounce"}
+    ):
+        normalized = {name.replace("-", "_").lower() for name in names}
+        has_hind = any(any(token in name for token in ("hind", "rear", "haunch", "thigh")) for name in normalized)
+        has_fore = any(any(token in name for token in ("fore", "front", "shoulder")) for name in normalized)
+        if not has_hind or not has_fore or len(moved_parts) < 3:
+            fail(
+                "a quadruped hop requires independently animated hindlimb and forelimb masks "
+                "plus at least one additional articulated body part; whole-body lift is not a hop"
+            )
+
+
+def validate_rig(spec, source_path, width, height, source):
+    frames = spec.get("frames", [])
+    if not isinstance(frames, list) or not (2 <= len(frames) <= 32):
+        fail("a rig animation must contain between 2 and 32 frames")
+    parts = spec.get("parts", [])
+    if not isinstance(parts, list) or not parts:
+        fail("a rig animation requires at least one movable part")
+    names = [slug(part.get("name", "")) for part in parts]
+    if any(not value for value in names) or len(set(names)) != len(names):
+        fail("rig part names must be unique and non-empty")
+
+    claimed = {}
+    warnings = []
+    for index, part in enumerate(parts):
+        label = f"part {names[index]!r}"
+        mask = part.get("mask", {})
+        if not isinstance(mask, dict):
+            fail(f"{label} mask must be an object")
+        validate_mask(mask, width, height, label)
+        pivot = part.get("pivot", [width / 2, height / 2])
+        if not isinstance(pivot, list) or len(pivot) != 2:
+            fail(f"{label} pivot must be [x,y]")
+        pivot_x = finite_number(pivot[0], f"{label} pivot x")
+        pivot_y = finite_number(pivot[1], f"{label} pivot y")
+        if not (0 <= pivot_x <= width and 0 <= pivot_y <= height):
+            fail(f"{label} pivot lies outside the locked master")
+        visible = []
+        for y in range(height):
+            for x in range(width):
+                offset = (y * width + x) * 4
+                if source[offset + 3] and mask_contains(mask, x, y):
+                    visible.append((x, y))
+        if not visible:
+            fail(f"{label} selected no visible pixels")
+        overlap = sorted({claimed[pixel] for pixel in visible if pixel in claimed})
+        if overlap and not part.get("allowOverlap", False):
+            warnings.append(f"{label} overlaps {', '.join(overlap)}; tighten the mask or set allowOverlap for intentional joint coverage")
+        for pixel in visible:
+            claimed.setdefault(pixel, names[index])
+
+    valid_targets = set(names) | {"base"}
+    for index, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            fail(f"frame {index + 1} must be an object")
+        validate_transform(frame.get("root", {}), f"frame {index + 1} root", root=True)
+        transforms = frame.get("transforms", {})
+        if not isinstance(transforms, dict):
+            fail(f"frame {index + 1} transforms must be an object")
+        unknown = set(transforms) - valid_targets
+        if unknown:
+            fail(f"frame {index + 1} transforms unknown parts: {', '.join(sorted(unknown))}")
+        for target, transform in transforms.items():
+            validate_transform(transform, f"frame {index + 1} transform {target!r}")
+
+    validate_articulated_motion(spec, names, frames)
+
+    master_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    recorded_hash = spec.get("masterHash")
+    if recorded_hash and recorded_hash != master_hash:
+        fail("locked master hash changed; create a new rig revision instead of rendering drifted artwork")
+    spec["rigVersion"] = 1
+    spec["planningMode"] = "ai-rig-deterministic-render"
+    spec["masterHash"] = master_hash
+    return names, frames, parts, warnings, master_hash
+
+
 def main():
-    if len(sys.argv) != 2:
-        fail("usage: python3 .sprite-studio/sprite_rig.py RIG.json")
+    validate_only = len(sys.argv) == 3 and sys.argv[1] == "--validate"
+    if not (len(sys.argv) == 2 or validate_only):
+        fail("usage: python3 .sprite-studio/sprite_rig.py [--validate] RIG.json")
     workspace = Path.cwd().resolve()
-    spec_path = Path(sys.argv[1])
+    spec_path = Path(sys.argv[2] if validate_only else sys.argv[1])
     if not spec_path.is_absolute():
         spec_path = workspace / spec_path
     spec = json.loads(spec_path.read_text())
@@ -215,15 +381,20 @@ def main():
     category = slug(spec.get("category", "characters"))
     if category not in {"characters", "creatures", "terrain", "props", "effects"}:
         fail("category must be characters, creatures, terrain, props, or effects")
-    frames = spec.get("frames", [])
-    if not (2 <= len(frames) <= 32):
-        fail("a rig animation must contain between 2 and 32 frames")
-    parts = spec.get("parts", [])
-    if not parts:
-        fail("a rig animation requires at least one movable part")
-    names = [slug(part.get("name", "")) for part in parts]
-    if any(not value for value in names) or len(set(names)) != len(names):
-        fail("rig part names must be unique and non-empty")
+    names, frames, parts, warnings, master_hash = validate_rig(spec, source_path, width, height, source)
+    report = {
+        "valid": True,
+        "name": name,
+        "source": str(source_path.relative_to(workspace)),
+        "masterHash": master_hash,
+        "parts": names,
+        "frames": len(frames),
+        "warnings": warnings,
+    }
+    if validate_only:
+        spec_path.write_text(json.dumps(spec, indent=2) + "\n")
+        print(json.dumps(report))
+        return
 
     base = bytearray(source)
     layers = []
@@ -283,6 +454,9 @@ def main():
         "category": category,
         "fps": fps,
         "files": [str(path.relative_to(workspace)) for path in output_paths],
+        "rig": str((Path(".sprite-studio") / "rigs" / f"{name}.json")),
+        "masterHash": master_hash,
+        "planningMode": "ai-rig-deterministic-render",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
     }
     metadata = workspace / ".sprite-studio"

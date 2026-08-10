@@ -6,6 +6,7 @@ mod error;
 mod jobs;
 mod models;
 mod motion_planner;
+mod packs;
 mod providers;
 mod quality;
 mod references;
@@ -66,6 +67,7 @@ pub fn run() {
             motion_planner::plan_motion,
             references::list_reference_images,
             references::import_reference_image,
+            references::import_reference_bytes,
             references::update_reference_image,
             references::delete_reference_image,
             references::set_conversation_reference,
@@ -81,6 +83,7 @@ pub fn run() {
             assets::export_asset,
             assets::get_generation_manifest,
             assets::list_asset_versions,
+            packs::list_asset_packs,
             animations::list_animations,
             animations::save_animation,
             animations::delete_animation,

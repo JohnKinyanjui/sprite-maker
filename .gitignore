@@ -3,6 +3,7 @@ node_modules
 /build
 /.svelte-kit
 /package
+/release-artifacts
 /qa
 /tmp
 .vscode

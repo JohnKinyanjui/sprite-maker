@@ -4,8 +4,8 @@
   import WorktreeExplorer from "$lib/components/WorktreeExplorer.svelte";
   import type { Conversation, Workspace, Worktree } from "$lib/types";
 
-  let { workspace, worktrees, selectedWorktreeId, conversations, selectedConversationId, onWorktree, onNewWorktree, onConversation, onNewConversation, onRenameConversation, onArchiveConversation, onSettings, onHome, onCollapse }: {
-    workspace: Workspace; worktrees: Worktree[]; selectedWorktreeId?: string; conversations: Conversation[]; selectedConversationId?: string;
+  let { workspace, worktrees, selectedWorktreeId, conversations, selectedConversationId, runningConversationIds, onWorktree, onNewWorktree, onConversation, onNewConversation, onRenameConversation, onArchiveConversation, onSettings, onHome, onCollapse }: {
+    workspace: Workspace; worktrees: Worktree[]; selectedWorktreeId?: string; conversations: Conversation[]; selectedConversationId?: string; runningConversationIds: string[];
     onWorktree: (worktree: Worktree) => void | Promise<void>; onNewWorktree: () => void;
     onConversation: (conversation: Conversation) => void | Promise<void>; onNewConversation: (worktree: Worktree) => void | Promise<void>;
     onRenameConversation: (conversation: Conversation, title: string) => void | Promise<void>;
@@ -33,7 +33,7 @@
   </div>
 
   <div class="scroll">
-    <WorktreeExplorer {worktrees} {conversations} {selectedWorktreeId} {selectedConversationId} onSelectWorktree={onWorktree} onCreateWorktree={onNewWorktree} onSelectConversation={onConversation} onCreateConversation={onNewConversation} onRenameConversation={(conversation)=>renameTarget=conversation} {onArchiveConversation}/>
+    <WorktreeExplorer {worktrees} {conversations} {selectedWorktreeId} {selectedConversationId} {runningConversationIds} onSelectWorktree={onWorktree} onCreateWorktree={onNewWorktree} onSelectConversation={onConversation} onCreateConversation={onNewConversation} onRenameConversation={(conversation)=>renameTarget=conversation} {onArchiveConversation}/>
   </div>
 
   <footer><button onclick={onSettings}><Settings size={15}/><span>Settings</span></button></footer>

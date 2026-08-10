@@ -1,6 +1,6 @@
 {
   "name": "sprite-maker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A local-first AI game asset development environment",
   "type": "module",
   "scripts": {
@@ -16,7 +16,9 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2",
-    "lucide-svelte": "^1.0.1"
+    "dompurify": "^3.4.13",
+    "lucide-svelte": "^1.0.1",
+    "marked": "^18.0.9"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",

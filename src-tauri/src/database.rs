@@ -488,7 +488,7 @@ fn migrate_v6(transaction: &Transaction<'_>) -> CommandResult<()> {
           maximum_frame_count INTEGER NOT NULL CHECK(maximum_frame_count >= minimum_frame_count),
           fps INTEGER NOT NULL CHECK(fps > 0),
           looping INTEGER NOT NULL,
-          allow_interpolation INTEGER NOT NULL DEFAULT 0,
+          allow_interpolation INTEGER NOT NULL DEFAULT 1,
           allow_auto_adjust INTEGER NOT NULL DEFAULT 0,
           explanation TEXT NOT NULL,
           created_at TEXT NOT NULL,

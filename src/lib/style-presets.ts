@@ -1,4 +1,4 @@
-export type StylePresetId = "pixel-rpg" | "graphic-adventure" | "cozy-chibi";
+export type StylePresetId = "pixel-rpg" | "graphic-adventure" | "cozy-chibi" | "limited-palette" | "isometric-pixel" | "painterly-fantasy" | "cel-shaded" | "one-bit";
 export type ConversationStyleId = StylePresetId | "inherit";
 
 export type StylePreset = {
@@ -30,6 +30,41 @@ export const STYLE_PRESETS: StylePreset[] = [
     description: "Rounded proportions, expressive face, clean outlines",
     thumbnail: "/style-presets/cozy-chibi.webp",
     prompt: "polished cozy chibi game character, rounded proportions, oversized expressive head, clean dark outline and simple readable shapes",
+  },
+  {
+    id: "limited-palette",
+    name: "Limited palette",
+    description: "Tight color ramp, deliberate clusters, crisp dithering",
+    thumbnail: "/style-presets/limited-palette.svg",
+    prompt: "handcrafted limited-palette pixel art, deliberate pixel clusters, one compact color ramp, selective dithering, crisp silhouette and no soft antialiasing",
+  },
+  {
+    id: "isometric-pixel",
+    name: "Isometric pixel",
+    description: "2:1 projection, readable planes, consistent top lighting",
+    thumbnail: "/style-presets/isometric-pixel.svg",
+    prompt: "polished 2:1 isometric pixel game art, consistent projection and top-left lighting, readable top and side planes, compact controlled palette",
+  },
+  {
+    id: "painterly-fantasy",
+    name: "Painterly fantasy",
+    description: "Soft painted planes, storybook texture, rich materials",
+    thumbnail: "/style-presets/painterly-fantasy.svg",
+    prompt: "original painterly fantasy game art, softly textured brushwork, layered material shapes, atmospheric color harmony, readable gameplay silhouette",
+  },
+  {
+    id: "cel-shaded",
+    name: "Cel shaded",
+    description: "Bold contour, flat shadow shapes, saturated accents",
+    thumbnail: "/style-presets/cel-shaded.svg",
+    prompt: "clean cel-shaded 2D game art, confident dark contour, flat graphic shadow shapes, saturated accent colors, highly readable silhouette",
+  },
+  {
+    id: "one-bit",
+    name: "One-bit",
+    description: "Two colors, strong negative space, retro clarity",
+    thumbnail: "/style-presets/one-bit.svg",
+    prompt: "high-clarity one-bit pixel art using exactly two colors, bold negative space, intentional clusters, no gray pixels and no antialiasing",
   },
 ];
 

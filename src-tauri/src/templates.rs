@@ -202,7 +202,7 @@ pub fn create_animation_template(
         frame_mode: frame_mode.clone(),
         min_frames: minimum,
         max_frames: maximum,
-        allow_interpolation: false,
+        allow_interpolation: true,
         allow_auto_adjust: frame_mode == "auto",
     };
     let plan = build_motion_plan(motion_description, &planning)?;
@@ -344,7 +344,7 @@ pub fn apply_animation_template(
         frame_mode: template.frame_mode.clone(),
         min_frames: template.min_frames,
         max_frames: template.max_frames,
-        allow_interpolation: false,
+        allow_interpolation: true,
         allow_auto_adjust: template.frame_mode == "auto",
     };
     let motion_plan = build_motion_plan(&template.motion_description, &generation)?;

@@ -5,9 +5,10 @@
   import { api, assetUrl } from "$lib/api";
   import { errorMessage, type Animation, type Asset, type BackgroundJob, type JobEvent, type VfxBlendMode, type VfxEffect, type VfxEffectType } from "$lib/types";
 
-  let { workspaceId, worktreeId, animations, assets, active, onCreated, onOpenSheets, onError, onNotice }: {
+  let { workspaceId, worktreeId, animations, assets, active, onCreated, onOpenSheets, onGenerate, onError, onNotice }: {
     workspaceId: string; worktreeId: string; animations: Animation[]; assets: Asset[]; active: boolean;
     onCreated: () => Promise<void>; onOpenSheets: (animation:Animation) => void;
+    onGenerate: (prompt:string) => Promise<void>;
     onError: (message:string)=>void; onNotice:(message:string)=>void;
   } = $props();
 
@@ -21,16 +22,22 @@
   let effects=$state<VfxEffect[]>([]);let jobs=$state<BackgroundJob[]>([]);let selectedEffectId=$state("");
   let effectType=$state<VfxEffectType>("magic");let name=$state("Arcane Pulse");let blendMode=$state<VfxBlendMode>("screen");
   let width=$state(64);let height=$state(64);let frames=$state(12);let fps=$state(12);let looping=$state(true);let seed=$state(42);
+  let generating=$state(false);
   let playing=$state(true);let frameIndex=$state(0);let background=$state<"checker"|"dark"|"light">("checker");let zoom=$state(5);
   const selectedEffect=$derived(effects.find(effect=>effect.id===selectedEffectId));
   const effectAnimation=$derived(selectedEffect?.animationId?animations.find(animation=>animation.id===selectedEffect.animationId):undefined);
   const frameAssets=$derived(effectAnimation?.frames.map(frame=>assets.find(asset=>asset.id===frame.assetId)).filter((asset):asset is Asset=>Boolean(asset))??[]);
-  const currentAsset=$derived(frameAssets[frameIndex]);const running=$derived(jobs.some(job=>job.kind==="procedural_vfx"&&["queued","running","analyzing"].includes(job.status)));
+  const currentAsset=$derived(frameAssets[frameIndex]);
   const cssBlend=$derived(selectedEffect?.blendMode==="multiply"?"multiply":selectedEffect?.blendMode==="normal"?"normal":"screen");
 
   async function refresh(){try{[effects,jobs]=await Promise.all([api.listVfxEffects(workspaceId,worktreeId),api.listJobs(workspaceId,worktreeId)]);if(!selectedEffectId&&effects.length)selectedEffectId=effects[0].id;}catch(error){onError(errorMessage(error));}}
   function choosePreset(id:VfxEffectType){const preset=presets.find(item=>item.id===id);if(!preset)return;effectType=preset.id;name=preset.name;frames=preset.frames;looping=preset.looping;blendMode=preset.blend;}
-  async function generate(){try{const job=await api.queueProceduralVfx({projectId:workspaceId,worktreeId,name,effectType,blendMode,width,height,frames,fps,looping,seed});jobs=[job,...jobs];onNotice("Procedural VFX job queued");}catch(error){onError(errorMessage(error));}}
+  async function generate(){
+    generating=true;
+    const motion=looping?"a seamless loop whose last frame returns cleanly to the first":"a one-shot effect with a clear impact peak and complete dissipation";
+    const prompt=`/effect Create “${name}”, an original high-quality ${effectType} game VFX. Use ImageGen once for a polished transparent master, then derive ${frames} consistent ${width}x${height} frames at ${fps} FPS with deterministic motion. Make ${motion}. Design for ${blendMode} blending, keep a stable gameplay origin, crisp alpha edges, no text, no border, and no background. Treat variation seed ${seed} as an art-direction cue. Use any active reference images for palette, shape language, lighting, and material only.`;
+    try{await onGenerate(prompt);onNotice("ImageGen VFX generation started in chat");}catch(error){onError(errorMessage(error));}finally{generating=false;}
+  }
   async function cancel(job:BackgroundJob){try{const updated=await api.cancelJob(job.id);jobs=jobs.map(item=>item.id===updated.id?updated:item);}catch(error){onError(errorMessage(error));}}
   function step(delta:number){if(!frameAssets.length)return;frameIndex=(frameIndex+delta+frameAssets.length)%frameAssets.length;}
   $effect(()=>{if(active){workspaceId;worktreeId;void refresh();}});
@@ -40,16 +47,16 @@
 </script>
 
 <section class="vfx-studio">
-  <header><div><h1>VFX studio</h1><p>AI-ready effects with deterministic Rust procedural generation</p></div><button class="primary" onclick={generate} disabled={running}><WandSparkles size={14}/>{running?"Rendering…":"Generate effect"}</button></header>
+  <header><div><h1>VFX studio</h1><p>ImageGen art direction with consistent deterministic motion</p></div><button class="primary" onclick={generate} disabled={generating}><WandSparkles size={14}/>{generating?"Starting…":"Create with ImageGen"}</button></header>
   <div class="body">
     <aside>
       <h2>Effect recipe</h2><div class="presets">{#each presets as preset}<button class:active={effectType===preset.id} onclick={()=>choosePreset(preset.id)}><span>{#if preset.id==="fire"||preset.id==="explosion"}<Flame size={14}/>{:else}<Sparkles size={14}/>{/if}</span><div><strong>{preset.name}</strong><small>{preset.detail}</small></div></button>{/each}</div>
       <label>Name<input bind:value={name}/></label><div class="pair"><label>Width<input type="number" min="8" max="1024" bind:value={width}/></label><label>Height<input type="number" min="8" max="1024" bind:value={height}/></label></div><div class="pair"><label>Frames<input type="number" min="2" max="64" bind:value={frames}/></label><label>FPS<input type="number" min="1" max="60" bind:value={fps}/></label></div><div class="pair"><label>Blend<select bind:value={blendMode}><option value="normal">Normal</option><option value="add">Add</option><option value="screen">Screen</option><option value="multiply">Multiply</option></select></label><label>Seed<input type="number" min="0" bind:value={seed}/></label></div><label class="check"><input type="checkbox" bind:checked={looping}/> Loop animation</label>
-      <div class="jobs"><h2>Jobs</h2>{#each jobs.filter(job=>job.kind==="procedural_vfx").slice(0,4) as job}<article><div><strong>{job.stage}</strong><span>{Math.round(job.progress*100)}%</span></div><i><b style={`width:${job.progress*100}%`}></b></i>{#if ["queued","running","analyzing"].includes(job.status)}<button onclick={()=>cancel(job)}><X size={10}/>Cancel</button>{/if}{#if job.errorMessage}<p>{job.errorMessage}</p>{/if}</article>{/each}{#if !jobs.some(job=>job.kind==="procedural_vfx")}<p>No effect jobs yet.</p>{/if}</div>
+      <div class="jobs"><h2>Previous local renders</h2>{#each jobs.filter(job=>job.kind==="procedural_vfx").slice(0,4) as job}<article><div><strong>{job.stage}</strong><span>{Math.round(job.progress*100)}%</span></div><i><b style={`width:${job.progress*100}%`}></b></i>{#if ["queued","running","analyzing"].includes(job.status)}<button onclick={()=>cancel(job)}><X size={10}/>Cancel</button>{/if}{#if job.errorMessage}<p>{job.errorMessage}</p>{/if}</article>{/each}{#if !jobs.some(job=>job.kind==="procedural_vfx")}<p>New ImageGen effects run in chat, where you can follow progress and use references.</p>{/if}</div>
     </aside>
     <main>
       <div class="preview-toolbar"><div>{#each ["checker","dark","light"] as option}<button class:active={background===option} onclick={()=>background=option as typeof background}>{option}</button>{/each}</div><label>Zoom<select bind:value={zoom}><option value={3}>3×</option><option value={5}>5×</option><option value={8}>8×</option></select></label></div>
-      <div class="preview" class:checker={background==="checker"} class:dark={background==="dark"} class:light={background==="light"}>{#if currentAsset}<img src={assetUrl(currentAsset.path)} alt={selectedEffect?.name} style={`width:${currentAsset.width*zoom}px;height:${currentAsset.height*zoom}px;mix-blend-mode:${cssBlend}`}/>{:else}<div class="placeholder"><Sparkles size={30}/><strong>Generate a procedural effect</strong><p>Each frame remains a normal transparent sprite you can edit, analyze, and export.</p></div>{/if}</div>
+      <div class="preview" class:checker={background==="checker"} class:dark={background==="dark"} class:light={background==="light"}>{#if currentAsset}<img src={assetUrl(currentAsset.path)} alt={selectedEffect?.name} style={`width:${currentAsset.width*zoom}px;height:${currentAsset.height*zoom}px;mix-blend-mode:${cssBlend}`}/>{:else}<div class="placeholder"><Sparkles size={30}/><strong>Create an ImageGen-guided effect</strong><p>Attach a visual reference in chat if needed; every final frame remains a transparent sprite you can animate and export.</p></div>{/if}</div>
       <div class="transport"><button onclick={()=>step(-1)}><ChevronLeft size={14}/></button><button class="play" onclick={()=>playing=!playing}>{#if playing}<Pause size={14}/>{:else}<Play size={14} fill="currentColor"/>{/if}</button><button onclick={()=>step(1)}><ChevronRight size={14}/></button><input type="range" aria-label="Scrub effect frames" min="0" max={Math.max(0,frameAssets.length-1)} bind:value={frameIndex}/><span>{frameAssets.length?`${frameIndex+1}/${frameAssets.length}`:"0/0"}</span>{#if effectAnimation}<button class="sheet" onclick={()=>onOpenSheets(effectAnimation)}><Grid3X3 size={12}/>Build sheet</button>{/if}</div>
       <section class="library"><div><h2>Effects</h2><p>{effects.length} reusable effect{effects.length===1?"":"s"}</p></div>{#if effects.length}<nav>{#each effects as effect}<button class:active={effect.id===selectedEffectId} onclick={()=>selectedEffectId=effect.id}><strong>{effect.name}</strong><span>{effect.effectType} · {effect.fps} FPS · {effect.blendMode}</span></button>{/each}</nav>{:else}<div class="empty">No effects in this worktree yet.</div>{/if}</section>
     </main>

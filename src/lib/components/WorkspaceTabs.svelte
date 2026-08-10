@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { MessageSquare, Images, BookImage, Clapperboard, Grid3X3, Gamepad2, Keyboard, Sparkles } from "lucide-svelte";
+  import { MessageSquare, Images, BookImage, Clapperboard, Grid3X3, Gamepad2, Keyboard, Sparkles, Boxes } from "lucide-svelte";
 
-  let { active, conversationTitle, worktreeName, assetCount, referenceCount, animationCount, showVfx = false, onSelect }: {
-    active: string; conversationTitle?: string; worktreeName?: string; assetCount: number; referenceCount: number; animationCount: number; showVfx?: boolean;
+  let { active, conversationTitle, worktreeName, assetCount, referenceCount, animationCount, packCount = 0, showVfx = false, onSelect }: {
+    active: string; conversationTitle?: string; worktreeName?: string; assetCount: number; referenceCount: number; animationCount: number; packCount?: number; showVfx?: boolean;
     onSelect: (tab: string) => void;
   } = $props();
 
@@ -13,6 +13,7 @@
     { id: "animate", label: "Animate", icon: Clapperboard, meta: String(animationCount) },
     ...(showVfx?[{ id: "vfx", label: "VFX", icon: Sparkles, meta: "" }]:[]),
     { id: "sheets", label: "Sheets", icon: Grid3X3, meta: "" },
+    { id: "packs", label: "Packs", icon: Boxes, meta: String(packCount) },
     { id: "play", label: "Playground", icon: Gamepad2, meta: "" },
   ]);
 </script>

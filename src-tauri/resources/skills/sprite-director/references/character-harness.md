@@ -19,7 +19,7 @@ Named games and supplied references are trait references only. Translate proport
 
 ## 2. ImageGen is mandatory
 
-Use the installed `imagegen` skill and call `image_gen__imagegen` only when a new master character is required. When an existing context asset is supplied, that asset is the master and no ImageGen call is needed. For animation, follow the deterministic character rig harness: segment the master into reusable pixel parts and render transforms with `.sprite-studio/sprite_rig.py`. Never use ImageGen for animation frames or pose sheets. Do not use primitive JSON rectangles, ellipses, or polygons as the primary character generator.
+Use the installed `imagegen` skill and call `image_gen__imagegen` only when a new master character is required. When an existing context asset is supplied, that asset is the master and no ImageGen call is needed. For animation, follow the deterministic character rig harness: segment the master into reusable pixel parts and render transforms with `.sprite-studio/sprite_rig.py`. Never use ImageGen to invent animation poses or pose sheets. Explicit AI Polish/Full redraw may edit completed rough frames only under the frame-polish contract. Do not use primitive JSON rectangles, ellipses, or polygons as the primary character generator.
 
 If `image_gen__imagegen` is not callable, stop and report that the ImageGen capability is unavailable. Never silently replace the requested ImageGen workflow with hand-drawn primitives.
 

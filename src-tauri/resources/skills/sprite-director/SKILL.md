@@ -19,8 +19,10 @@ Turn the user's intent into real, game-ready PNG files. The Rust harness routes 
 
 - `character`: follow `references/character-harness.md`. ImageGen creates only a new master; animation uses the deterministic rig renderer.
 - `creature`: follow `references/creature-harness.md`. Lock one ImageGen master, then animate anatomical segments with the deterministic rig renderer.
+- `effect`: follow `references/effect-harness.md`. ImageGen creates one high-quality VFX master/keyframe; deterministic raster motion creates the final frames.
 - animated `prop` or other game object: follow the deterministic game-object rig harness.
-- static `prop`, `terrain`, and `effect`: use the deterministic renderer workflow below.
+- full `terrain tileset`: follow `references/terrain-tileset-harness.md` and return one atlas PNG, never one file per tile.
+- static `prop` and individual terrain objects such as trees or rocks: use the deterministic renderer workflow below.
 
 The routed harness name appears above the request. Do not substitute another harness.
 
@@ -47,10 +49,11 @@ Use `terrain`, `props`, or `effects` as the category. Character jobs must use th
 For any raster master that needs animation, write a rig JSON and run:
 
 ```bash
+python3 .sprite-studio/sprite_rig.py --validate .sprite-studio/rigs/<rig>.json
 python3 .sprite-studio/sprite_rig.py .sprite-studio/rigs/<rig>.json
 ```
 
-The rig selects movable pixels with rect or polygon masks, assigns physical pivots and z order, then applies nearest-neighbour translations, rotations, and scales. It supports characters and game objects. ImageGen must never generate animation frames or pose sheets.
+The AI proposes the parts, masks, physical pivots, z order, and motion table. The validation pass checks that proposal and locks the master hash. Only then does the deterministic renderer apply nearest-neighbour translations, rotations, and scales. It supports characters and game objects. ImageGen must never invent animation timing, poses, or pose sheets. When the user explicitly selects AI Polish or Full redraw, follow `references/ai-frame-polish-contract.md`: edit only completed rough rig frames and pass every result through `sprite_polish.py` before acceptance.
 
 ## Validate
 

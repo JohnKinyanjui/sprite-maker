@@ -69,9 +69,11 @@ jobs:
           tagName: v__VERSION__
           releaseName: Sprite Studio v__VERSION__
           releaseBody: |
-            First public alpha of Sprite Studio.
+            Sprite Studio v__VERSION__ is a major workflow update for creating production-ready 2D game art locally.
 
-            Download the installer for your platform below. This release includes native builds for Windows, Linux, Apple Silicon Macs, and Intel Macs.
+            Highlights include anatomy-aware rigging, deterministic frame rendering, optional regional AI polish, physical motion planning, seamless loop validation, complete terrain atlases, coordinated asset packs, chat-scoped image references, Markdown previews, concurrent chat generation, a zoomable sprite viewer, and per-chat generation controls with interpolation enabled by default.
+
+            Download the installer for your platform below. Native builds are provided for Windows, Linux, Apple Silicon Macs, and Intel Macs. See the repository changelog for the complete update notes.
           releaseDraft: false
           prerelease: true
           args: ${{ matrix.args }}
