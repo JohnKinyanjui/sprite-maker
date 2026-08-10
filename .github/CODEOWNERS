@@ -1,0 +1,7 @@
+# The project owner must review changes anywhere in the repository.
+* @JohnKinyanjui
+
+# Keep ownership and automation policy under the same review boundary.
+/.github/ @JohnKinyanjui
+/GOVERNANCE.md @JohnKinyanjui
+/CONTRIBUTING.md @JohnKinyanjui

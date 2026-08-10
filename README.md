@@ -233,6 +233,10 @@ SQLite stores project metadata, conversations, worktrees, asset versions, timeli
 
 Sprite Studio `0.2.0` is an early public release. The core desktop workflow works, but file formats, provider adapters, and generation harnesses will continue to evolve.
 
+## Contributing and governance
+
+Contributions are welcome through reviewed pull requests. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [GOVERNANCE.md](GOVERNANCE.md) for the distinction between contribution credit, maintainer access, code ownership, and project ownership.
+
 ## License
 
 MIT
