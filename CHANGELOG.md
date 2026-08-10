@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.1 — 2026-08-10
+
+### Fixed
+
+- Restored playable inline sprite and animation cards when parallel generation changed the shared latest-generation manifest before chat metadata could be attached.
+- Replaced unhelpful workspace folder and preview links with the existing in-chat sprite component whenever generated assets can be identified.
+- Fixed inline animation playback stopping after a single frame; previews now loop continuously at the animation's configured FPS.
+- Prevented relative workspace links in Markdown from navigating the desktop webview to a 404 page.
+- Added safe handling for external, relative, absolute, encoded, macOS, Linux, and Windows Markdown links.
+
+### Quality
+
+- Added frontend regression tests for generation-card recovery and Markdown link routing.
+- Added the frontend test suite to continuous integration.
+
 ## 0.2.0 — 2026-08-10
 
 Sprite Studio 0.2 turns the original sprite experiment into a practical local-first game-art workbench.

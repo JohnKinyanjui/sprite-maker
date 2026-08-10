@@ -16,8 +16,8 @@
 
   $effect(() => {
     if (!playing || frames.length < 2) return;
-    const timer = window.setTimeout(() => frame = (frame + 1) % frames.length, 1000 / Math.max(1, generation.fps));
-    return () => window.clearTimeout(timer);
+    const timer = window.setInterval(() => frame = (frame + 1) % frames.length, 1000 / Math.max(1, generation.fps));
+    return () => window.clearInterval(timer);
   });
 
   function edit() {
