@@ -3330,6 +3330,7 @@ dependencies = [
  "blake3",
  "chrono",
  "image",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

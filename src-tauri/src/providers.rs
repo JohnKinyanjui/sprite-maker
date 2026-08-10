@@ -12,8 +12,14 @@ use crate::{
 };
 use serde::Deserialize;
 use std::{
+    env,
+    ffi::{OsStr, OsString},
+    fs::{self, OpenOptions},
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
+    sync::OnceLock,
+    thread,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::{
@@ -24,10 +30,12 @@ use tokio::{
 use uuid::Uuid;
 
 fn find_executable(name: &str) -> Option<PathBuf> {
-    if let Ok(path) = which::which(name) {
+    let search_path = current_provider_environment_path();
+    let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Ok(path) = which::which_in(name, Some(search_path), current_dir) {
         return Some(path);
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = env::var_os("HOME").map(PathBuf::from);
     let mut candidates = vec![
         PathBuf::from("/opt/homebrew/bin").join(name),
         PathBuf::from("/usr/local/bin").join(name),
@@ -37,6 +45,203 @@ fn find_executable(name: &str) -> Option<PathBuf> {
         candidates.push(home.join(".codex/bin").join(name));
     }
     candidates.into_iter().find(|path| path.is_file())
+}
+
+fn merge_provider_paths(
+    inherited: Option<&OsStr>,
+    login_shell: Option<&OsStr>,
+    home: Option<&Path>,
+) -> OsString {
+    let mut entries = Vec::<PathBuf>::new();
+    let mut append = |value: &OsStr| {
+        for path in env::split_paths(value) {
+            if !entries.contains(&path) {
+                entries.push(path);
+            }
+        }
+    };
+    if let Some(path) = login_shell {
+        append(path);
+    }
+    if let Some(path) = inherited {
+        append(path);
+    }
+    if let Some(home) = home {
+        let local_bin = home.join(".local/bin");
+        if !entries.contains(&local_bin) {
+            entries.push(local_bin);
+        }
+    }
+    env::join_paths(entries).unwrap_or_else(|_| inherited.unwrap_or_default().to_os_string())
+}
+
+const PROVIDER_PATH_MARKER: &str = "__SPRITE_STUDIO_PATH__=";
+
+fn login_shell_path(shell: &Path) -> Option<OsString> {
+    login_shell_path_with_timeout(shell, Duration::from_secs(3))
+}
+
+#[cfg(unix)]
+fn isolate_login_shell(command: &mut StdCommand) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn isolate_login_shell(_command: &mut StdCommand) {}
+
+#[cfg(unix)]
+fn kill_login_shell_group(pid: u32, observed_exit: bool) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: the probe is placed in a dedicated process group whose id is the
+    // direct child's pid. A negative pid asks kill(2) to signal that group.
+    let result = unsafe { libc::kill(-pid, libc::SIGKILL) };
+    let error = std::io::Error::last_os_error();
+    result == 0
+        || error.raw_os_error() == Some(libc::ESRCH)
+        // macOS reports EPERM when WNOWAIT has confirmed that the group
+        // contains only the unreaped zombie leader and no signalable members.
+        || (observed_exit && error.raw_os_error() == Some(libc::EPERM))
+}
+
+#[cfg(not(unix))]
+fn kill_login_shell_group(_pid: u32, _observed_exit: bool) -> bool {
+    true
+}
+
+enum LoginShellState {
+    Running,
+    Exited,
+    Error,
+}
+
+#[cfg(unix)]
+fn login_shell_state(child: &mut std::process::Child) -> LoginShellState {
+    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    // SAFETY: info points to writable siginfo_t storage, and WNOWAIT observes
+    // the child without reaping it so its PID/process-group id cannot be reused.
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            info.as_mut_ptr(),
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if result != 0 {
+        return LoginShellState::Error;
+    }
+    // SAFETY: waitid initialized info on success. A zero pid with WNOHANG means
+    // the child has not changed state yet.
+    let pid = unsafe { info.assume_init().si_pid() };
+    if pid == 0 {
+        LoginShellState::Running
+    } else {
+        LoginShellState::Exited
+    }
+}
+
+#[cfg(not(unix))]
+fn login_shell_state(child: &mut std::process::Child) -> LoginShellState {
+    match child.try_wait() {
+        Ok(Some(_)) => LoginShellState::Exited,
+        Ok(None) => LoginShellState::Running,
+        Err(_) => LoginShellState::Error,
+    }
+}
+
+fn stop_login_shell(
+    child: &mut std::process::Child,
+    observed_exit: bool,
+) -> Option<std::process::ExitStatus> {
+    if !kill_login_shell_group(child.id(), observed_exit) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+    let _ = child.kill();
+    child.wait().ok()
+}
+
+fn login_shell_path_with_timeout(shell: &Path, timeout: Duration) -> Option<OsString> {
+    let output_path = env::temp_dir().join(format!("sprite-studio-path-{}.txt", Uuid::new_v4()));
+    let result = (|| {
+        let output_file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&output_path)
+            .ok()?;
+        let mut command = StdCommand::new(shell);
+        command
+            .args(["-ilc", "printf '\\n__SPRITE_STUDIO_PATH__=%s\\n' \"$PATH\""])
+            .stdout(Stdio::from(output_file))
+            .stderr(Stdio::null());
+        isolate_login_shell(&mut command);
+        let mut child = command.spawn().ok()?;
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            match login_shell_state(&mut child) {
+                LoginShellState::Exited => break stop_login_shell(&mut child, true)?,
+                LoginShellState::Running => {}
+                LoginShellState::Error => {
+                    let _ = stop_login_shell(&mut child, false);
+                    return None;
+                }
+            }
+            if Instant::now() >= deadline {
+                let _ = stop_login_shell(&mut child, false);
+                return None;
+            }
+            thread::sleep(
+                Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        };
+        if !status.success() {
+            return None;
+        }
+        let stdout = fs::read(&output_path).ok()?;
+
+        let stdout = String::from_utf8(stdout).ok()?;
+        stdout.lines().rev().find_map(|line| {
+            line.strip_prefix(PROVIDER_PATH_MARKER)
+                .filter(|path| !path.is_empty())
+                .map(OsString::from)
+        })
+    })();
+    let _ = fs::remove_file(output_path);
+    result
+}
+
+fn provider_environment_path(
+    inherited: Option<&OsStr>,
+    shell: Option<&Path>,
+    home: Option<&Path>,
+) -> OsString {
+    let login_shell = shell.and_then(login_shell_path);
+    merge_provider_paths(inherited, login_shell.as_deref(), home)
+}
+
+fn current_provider_environment_path() -> &'static OsString {
+    static PATH: OnceLock<OsString> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let inherited = env::var_os("PATH");
+        let home = env::var_os("HOME").map(PathBuf::from);
+        #[cfg(not(windows))]
+        let shell = env::var_os("SHELL")
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .or_else(|| {
+                ["/bin/zsh", "/bin/bash", "/bin/sh"]
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .find(|path| path.is_file())
+            });
+        #[cfg(windows)]
+        let shell: Option<PathBuf> = None;
+        provider_environment_path(inherited.as_deref(), shell.as_deref(), home.as_deref())
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +268,7 @@ struct CodexReasoningLevel {
 fn codex_modes(executable: &Path) -> Vec<ProviderMode> {
     let Ok(output) = StdCommand::new(executable)
         .args(["debug", "models"])
+        .env("PATH", current_provider_environment_path())
         .output()
     else {
         return Vec::new();
@@ -254,11 +460,24 @@ fn parse_codex_line(line: &str) -> (Option<String>, Option<String>, Option<Strin
     if event_type == "turn.failed" || event_type == "error" {
         let message = value
             .get("message")
+            .or_else(|| value.get("error").and_then(|error| error.get("message")))
             .and_then(|value| value.as_str())
             .unwrap_or(line);
-        return (None, Some(message.to_string()), None);
+        return (Some(message.to_string()), None, None);
     }
     (None, None, None)
+}
+
+fn provider_failure_message(status: &str, stderr: &str, response: &str) -> String {
+    if !response.trim().is_empty() && !stderr.trim().is_empty() {
+        format!("{response}\n\nProvider stderr:\n{stderr}")
+    } else if !response.trim().is_empty() {
+        response.to_string()
+    } else if !stderr.trim().is_empty() {
+        stderr.to_string()
+    } else {
+        format!("Codex exited with status {status}")
+    }
 }
 
 #[tauri::command]
@@ -401,6 +620,7 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
     );
     let mut child = match Command::new(executable)
         .args(&arguments)
+        .env("PATH", current_provider_environment_path())
         .current_dir(workspace)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -503,11 +723,7 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
             emit(&app, &request_id, &conversation_id, "completed", response);
         }
         Ok(exit) => {
-            let message = if stderr_output.trim().is_empty() {
-                format!("Codex exited with status {exit}")
-            } else {
-                stderr_output
-            };
+            let message = provider_failure_message(&exit.to_string(), &stderr_output, &response);
             let _ = update_message(&state, &assistant_id, &message, "failed");
             emit(&app, &request_id, &conversation_id, "failed", message);
         }
@@ -643,8 +859,245 @@ pub fn cancel_provider_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{codex_arguments, parse_codex_line, validate_provider_options};
+    use super::{
+        codex_arguments, login_shell_path, login_shell_path_with_timeout, merge_provider_paths,
+        parse_codex_line, provider_environment_path, provider_failure_message,
+        validate_provider_options,
+    };
     use crate::models::{GenerationOptions, ProviderRequestOptions};
+    use std::{env, path::PathBuf};
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_provider_path_from_login_shell_output() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+        use uuid::Uuid;
+
+        let root = env::temp_dir().join(format!("sprite-studio-shell-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("test directory should exist");
+        let shell = root.join("shell");
+        fs::write(
+            &shell,
+            "#!/bin/sh\nprintf 'shell startup noise\\n__SPRITE_STUDIO_PATH__=/runtime/bin:/system/bin\\n'\n",
+        )
+        .expect("fake shell should be written");
+        let mut permissions = fs::metadata(&shell)
+            .expect("fake shell metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&shell, permissions).expect("fake shell should be executable");
+
+        let discovered = login_shell_path(&shell);
+
+        assert_eq!(
+            discovered.as_deref(),
+            Some(std::ffi::OsStr::new("/runtime/bin:/system/bin"))
+        );
+        fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_path_times_out_and_reaps_stuck_shell() {
+        use std::{
+            fs,
+            os::unix::fs::PermissionsExt,
+            process::Command,
+            time::{Duration, Instant},
+        };
+        use uuid::Uuid;
+
+        let root = env::temp_dir().join(format!("sprite-studio-shell-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("test directory should exist");
+        let shell = root.join("shell");
+        fs::write(&shell, "#!/bin/sh\nwhile :; do :; done\n")
+            .expect("fake shell should be written");
+        let mut permissions = fs::metadata(&shell)
+            .expect("fake shell metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&shell, permissions).expect("fake shell should be executable");
+
+        let started = Instant::now();
+        let discovered = login_shell_path_with_timeout(&shell, Duration::from_millis(250));
+        let elapsed = started.elapsed();
+
+        assert!(discovered.is_none());
+        assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+        assert!(!Command::new("/usr/bin/pgrep")
+            .args(["-f", shell.to_str().expect("UTF-8 test path")])
+            .output()
+            .expect("process probe should run")
+            .status
+            .success());
+        fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_timeout_kills_descendants() {
+        use std::{fs, os::unix::fs::PermissionsExt, process::Command, time::Duration};
+        use uuid::Uuid;
+
+        let root = env::temp_dir().join(format!("sprite-studio-shell-tree-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("test directory should exist");
+        let descendant_pid = root.join("descendant.pid");
+        let shell = root.join("shell");
+        fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\n(sleep 30) >/dev/null 2>&1 &\nprintf '%s' \"$!\" > '{}'\nwhile :; do :; done\n",
+                descendant_pid.display()
+            ),
+        )
+        .expect("fake shell should be written");
+        let mut permissions = fs::metadata(&shell)
+            .expect("fake shell metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&shell, permissions).expect("fake shell should be executable");
+
+        let discovered = login_shell_path_with_timeout(&shell, Duration::from_secs(2));
+        let pid = fs::read_to_string(&descendant_pid).expect("descendant should record its pid");
+        let descendant_survived = Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("descendant probe should run")
+            .success();
+        if descendant_survived {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", pid.trim()])
+                .status();
+        }
+        fs::remove_dir_all(root).expect("test directory should be removed");
+
+        assert!(discovered.is_none());
+        assert!(!descendant_survived, "timed-out shell left a descendant");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_output_is_bounded_when_descendants_inherit_handles() {
+        use std::{
+            fs,
+            os::unix::fs::PermissionsExt,
+            time::{Duration, Instant},
+        };
+        use uuid::Uuid;
+
+        let root = env::temp_dir().join(format!("sprite-studio-shell-output-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("test directory should exist");
+        let descendant_pid = root.join("descendant.pid");
+        let shell = root.join("shell");
+        fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\n(sleep 5) &\nprintf '%s' \"$!\" > '{}'\nprintf '\\n__SPRITE_STUDIO_PATH__=/runtime/bin:/system/bin\\n'\n",
+                descendant_pid.display()
+            ),
+        )
+        .expect("fake shell should be written");
+        let mut permissions = fs::metadata(&shell)
+            .expect("fake shell metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&shell, permissions).expect("fake shell should be executable");
+
+        let started = Instant::now();
+        let discovered = login_shell_path_with_timeout(&shell, Duration::from_secs(3));
+        let elapsed = started.elapsed();
+        let pid = fs::read_to_string(&descendant_pid).expect("descendant should record its pid");
+        let descendant_survived = std::process::Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("descendant probe should run")
+            .success();
+        if descendant_survived {
+            let _ = std::process::Command::new("/bin/kill")
+                .args(["-KILL", pid.trim()])
+                .status();
+        }
+        fs::remove_dir_all(root).expect("test directory should be removed");
+
+        assert_eq!(
+            discovered.as_deref(),
+            Some(std::ffi::OsStr::new("/runtime/bin:/system/bin"))
+        );
+        assert!(elapsed < Duration::from_secs(4), "elapsed: {elapsed:?}");
+        assert!(!descendant_survived, "successful shell left a descendant");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_environment_runs_env_shebang_with_shell_runtime() {
+        use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+        use uuid::Uuid;
+
+        let root = env::temp_dir().join(format!("sprite-studio-provider-test-{}", Uuid::new_v4()));
+        let runtime_bin = root.join("runtime/bin");
+        fs::create_dir_all(&runtime_bin).expect("runtime directory should exist");
+
+        let node = runtime_bin.join("node");
+        fs::write(&node, "#!/bin/sh\nexit 0\n").expect("fake node should be written");
+        let provider = root.join("codex");
+        fs::write(&provider, "#!/usr/bin/env node\n").expect("fake provider should be written");
+        let shell = root.join("shell");
+        fs::write(
+            &shell,
+            format!(
+                "#!/bin/sh\nprintf '__SPRITE_STUDIO_PATH__={}:{}\\n'\n",
+                runtime_bin.display(),
+                "/usr/bin:/bin"
+            ),
+        )
+        .expect("fake shell should be written");
+
+        for executable in [&node, &provider, &shell] {
+            let mut permissions = fs::metadata(executable)
+                .expect("executable metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(executable, permissions).expect("file should be executable");
+        }
+
+        let inherited = env::join_paths([PathBuf::from("/usr/bin"), PathBuf::from("/bin")])
+            .expect("valid restricted PATH");
+        let path =
+            provider_environment_path(Some(inherited.as_os_str()), Some(&shell), Some(&root));
+        let status = Command::new(&provider)
+            .env("PATH", path)
+            .status()
+            .expect("provider should start");
+
+        assert!(status.success());
+        fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn merges_login_shell_path_for_gui_provider_processes() {
+        let runtime_bin = PathBuf::from("/runtime/bin");
+        let system_bin = PathBuf::from("/system/bin");
+        let inherited = env::join_paths([system_bin.clone()]).expect("valid inherited PATH");
+        let login_shell =
+            env::join_paths([runtime_bin.clone(), system_bin.clone()]).expect("valid shell PATH");
+        let home = PathBuf::from("/Users/example");
+
+        let merged = merge_provider_paths(
+            Some(inherited.as_os_str()),
+            Some(login_shell.as_os_str()),
+            Some(&home),
+        );
+        let entries = env::split_paths(&merged).collect::<Vec<_>>();
+
+        assert_eq!(entries.first(), Some(&runtime_bin));
+        assert_eq!(
+            entries.iter().filter(|path| **path == system_bin).count(),
+            1
+        );
+        assert!(entries.contains(&home.join(".local/bin")));
+    }
 
     #[test]
     fn parses_streamed_agent_messages() {
@@ -668,6 +1121,34 @@ mod tests {
     fn preserves_non_json_provider_output() {
         let (content, _, _) = parse_codex_line("plain provider output");
         assert_eq!(content.as_deref(), Some("plain provider output"));
+    }
+
+    #[test]
+    fn preserves_structured_provider_errors_as_response_content() {
+        let line = r#"{"type":"error","message":"resume payload is invalid"}"#;
+        let (content, activity, _) = parse_codex_line(line);
+
+        assert_eq!(content.as_deref(), Some("resume payload is invalid"));
+        assert!(activity.is_none());
+    }
+
+    #[test]
+    fn nonzero_exit_uses_provider_response_when_stderr_is_empty() {
+        let message = provider_failure_message("exit status: 1", "", "resume payload is invalid");
+
+        assert_eq!(message, "resume payload is invalid");
+    }
+
+    #[test]
+    fn nonzero_exit_preserves_provider_response_and_stderr() {
+        let message = provider_failure_message(
+            "exit status: 1",
+            "provider diagnostic context",
+            "resume payload is invalid",
+        );
+
+        assert!(message.contains("resume payload is invalid"));
+        assert!(message.contains("provider diagnostic context"));
     }
 
     #[test]
