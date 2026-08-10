@@ -29,6 +29,7 @@ uuid = { version = "1", features = ["v4"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt-multi-thread"] }
 which = "7"
+libc = "0.2"
 thiserror = "2"
 blake3 = "1.8"
 
