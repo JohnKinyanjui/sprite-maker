@@ -3,6 +3,7 @@
   import { ArrowUp, Bot, Square, Sparkles, Terminal, Paperclip, AlertTriangle, Check, ChevronDown, X, WandSparkles, Clapperboard, Image, UserRound, Zap, BookImage, Crosshair, Unlock, Boxes } from "lucide-svelte";
   import { assetUrl } from "$lib/api";
   import SpriteArtifactCard from "$lib/components/SpriteArtifactCard.svelte";
+  import { contentWithoutSpriteOutputLinks, inferMessageGeneration } from "$lib/message-generations";
   import StylePicker from "$lib/components/StylePicker.svelte";
   import GenerationProfileMenu from "$lib/components/GenerationProfileMenu.svelte";
   import MarkdownMessage from "$lib/components/MarkdownMessage.svelte";
@@ -90,19 +91,12 @@
   }
 
   function generationFor(message: Message): SpriteGenerationMetadata | undefined {
-    const value = message.metadata.generation;
-    if (!value || typeof value !== "object" || !("kind" in value) || value.kind !== "sprite-generation") return;
-    return value as SpriteGenerationMetadata;
+    return inferMessageGeneration(message, assets, animations);
   }
 
   function visibleContent(message: Message, generation?: SpriteGenerationMetadata): string {
     if (!generation) return message.content;
-    return message.content
-      .replace(/\s*[-·]?\s*\[Frame\s+\d+\]\([^)]+\.png\)/gi, "")
-      .replace(/^The source \[Sprite Studio spec\].*$/gim, "")
-      .replace(/\*\*([^*]+)\*\*/g, "$1")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    return contentWithoutSpriteOutputLinks(message.content);
   }
 </script>
 
