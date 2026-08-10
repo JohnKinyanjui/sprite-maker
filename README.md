@@ -184,6 +184,16 @@ Agent providers and image-generation backends are deliberately separate. Codex C
 
 Sprite Studio is an active `0.1.0` alpha. The core desktop workflow works, but file formats, provider adapters, and generation harnesses may still evolve.
 
+## Contributing and recognition
+
+Contributions are welcome. Every accepted commit keeps its Git authorship, while official project roles are curated separately:
+
+- **Project owner:** [@JohnKinyanjui](https://github.com/JohnKinyanjui)
+- **Recognized contributors:** added after 10 substantive merged pull requests, or by explicit approval from the project owner
+- **Maintainers:** invitation-only and appointed by the project owner
+
+Small fixes are appreciated, but trivial, automated, duplicate, or spam pull requests do not count toward the recognition threshold. See [CONTRIBUTING.md](CONTRIBUTING.md) for the review, quality, and recognition policy.
+
 ## License
 
 MIT
