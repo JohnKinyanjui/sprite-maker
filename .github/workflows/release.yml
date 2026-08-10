@@ -75,5 +75,5 @@ jobs:
 
             Download the installer for your platform below. Native builds are provided for Windows, Linux, Apple Silicon Macs, and Intel Macs. See CHANGELOG.md for complete details.
           releaseDraft: false
-          prerelease: true
+          prerelease: false
           args: ${{ matrix.args }}
