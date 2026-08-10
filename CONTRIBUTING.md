@@ -25,14 +25,14 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-Pull requests must report the relevant local quality checks in their validation notes. Changes are merged only after review by the project owner or an appointed maintainer. Review approval may be withdrawn when new commits materially change the reviewed patch.
+Pull requests must pass the repository's automated quality check and report the relevant local checks in their validation notes. Changes are merged only after review by the project owner or an appointed maintainer. Review approval may be withdrawn when new commits materially change the reviewed patch.
 
 ## Review and acceptance
 
 - The project owner has final authority over product direction, scope, and release readiness.
 - A pull request may be declined even when it works if it conflicts with the product direction, duplicates another solution, increases maintenance cost disproportionately, or lacks sufficient validation.
 - External pull requests require owner or maintainer approval and resolved review conversations before merge.
-- Passing local or hosted automation is not approval by itself.
+- Passing automation is necessary but is not approval by itself.
 - AI-assisted contributions are allowed, but the author remains responsible for understanding, testing, and supporting the submitted code. Disclose substantial AI-generated work in the pull request.
 - Do not submit copyrighted game assets, close copies of protected characters, secrets, private user data, or dependencies without a compatible license.
 
