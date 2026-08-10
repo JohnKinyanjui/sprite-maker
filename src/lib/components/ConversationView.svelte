@@ -10,15 +10,15 @@
   import { stylePreset, type ConversationStyleId, type StylePresetId } from "$lib/style-presets";
   import type { Animation, Asset, ChatGenerationProfile, Conversation, Message, ProviderStatus, ReferenceImage, SpriteGenerationMetadata } from "$lib/types";
 
-  let { conversation, messages, provider, runningRequestId, activity, selectedAsset, assets, animations, references, activeReferenceIds, focusedReferenceId, draftPrompt="", workspaceStyle, conversationStyle, generationProfile, onSend, onCancel, onClearAsset, onEditAsset, onEditAnimation, onExportAsset, onExportAnimation, onConversationStyle, onGenerationProfile, onAttachReferencePaths, onAttachReferenceFiles, onFocusReference, onRemoveReference, onDraftConsumed }: {
+  let { conversation, messages, provider, runningRequestId, activity, selectedAsset, assets, animations, references, activeReferenceIds, focusedReferenceId, draftPrompt="", workspacePath, workspaceStyle, conversationStyle, generationProfile, onSend, onCancel, onClearAsset, onEditAsset, onEditAnimation, onExportAsset, onExportAnimation, onConversationStyle, onGenerationProfile, onAttachReferencePaths, onAttachReferenceFiles, onFocusReference, onRemoveReference, onDraftConsumed, onLinkError }: {
     conversation?: Conversation; messages: Message[]; provider?: ProviderStatus; runningRequestId?: string; activity: string[]; selectedAsset?: Asset; assets: Asset[]; animations: Animation[];
     references: ReferenceImage[]; activeReferenceIds: string[]; focusedReferenceId?: string;
-    draftPrompt?: string;
+    draftPrompt?: string; workspacePath: string;
     workspaceStyle: StylePresetId; conversationStyle: ConversationStyleId; generationProfile: ChatGenerationProfile;
     onSend: (prompt: string) => Promise<void>; onCancel: () => void; onClearAsset: () => void; onEditAsset: (asset: Asset) => void; onEditAnimation: (animation: Animation) => void; onExportAsset: (asset: Asset) => Promise<void>; onExportAnimation: (animation: Animation) => Promise<void>; onConversationStyle: (style: ConversationStyleId) => void | Promise<void>;
     onGenerationProfile: (profile: ChatGenerationProfile) => void | Promise<void>;
     onAttachReferencePaths: (paths: string[]) => Promise<void>; onAttachReferenceFiles: (files: File[]) => Promise<void>; onFocusReference: (id?: string) => Promise<void>; onRemoveReference: (id: string) => Promise<void>;
-    onDraftConsumed: () => void;
+    onDraftConsumed: () => void; onLinkError: (message: string) => void;
   } = $props();
   let prompt = $state("");
   let sending = $state(false);
@@ -128,7 +128,7 @@
             <div class="avatar">{#if message.role === "user"}<span>You</span>{:else}<Bot size={15} />{/if}</div>
             <div class="message-body">
               <div class="message-meta"><strong>{message.role === "user" ? "You" : "Codex"}</strong><time>{new Date(message.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</time></div>
-              {#if message.content}<div class="content"><MarkdownMessage content={visibleContent(message,generation)}/></div>{/if}
+              {#if message.content}<div class="content"><MarkdownMessage content={visibleContent(message,generation)} {workspacePath} {onLinkError}/></div>{/if}
               {#if generation}<SpriteArtifactCard {generation} {assets} {animations} {onEditAsset} {onEditAnimation} {onExportAsset} {onExportAnimation}/>{/if}
               {#if message.status === "running"}
                 <div class="working"><span class="spinner"></span> Working in workspace</div>

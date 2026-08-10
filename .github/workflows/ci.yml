@@ -43,6 +43,9 @@ jobs:
       - name: Check frontend
         run: bun run check
 
+      - name: Test frontend
+        run: bun test
+
       - name: Test native core
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
