@@ -1,4 +1,4 @@
-import type { Animation, Asset, Message, SpriteGenerationMetadata } from "$lib/types";
+import type { Animation, Asset, AssetPack, Message, PackGenerationMetadata, SpriteGenerationMetadata } from "$lib/types";
 
 function includesToken(content: string, token: string | undefined): boolean {
   const value = token?.trim().toLowerCase();
@@ -56,6 +56,22 @@ export function inferMessageGeneration(message: Message, assets: Asset[], animat
     fps: 1,
     assetIds: [first.id],
   };
+}
+
+export function inferMessagePack(message: Message, packs: AssetPack[]): { pack: AssetPack; metadata: PackGenerationMetadata } | undefined {
+  const stored = message.metadata.packGeneration;
+  if (stored && typeof stored === "object" && "kind" in stored && stored.kind === "pack-generation" && "packId" in stored) {
+    const pack = packs.find(item => item.id === stored.packId);
+    if (pack) return { pack, metadata: stored as PackGenerationMetadata };
+  }
+  if (message.role !== "assistant" || message.status !== "completed") return;
+  const content = message.content.toLowerCase();
+  const pack = packs.find(item =>
+    includesToken(content, item.id)
+    || includesToken(content, item.name)
+    || item.files.some(file => includesToken(content, file))
+  );
+  return pack ? { pack, metadata: { kind: "pack-generation", packId: pack.id } } : undefined;
 }
 
 export function contentWithoutSpriteOutputLinks(content: string): string {

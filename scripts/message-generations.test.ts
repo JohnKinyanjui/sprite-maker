@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { contentWithoutSpriteOutputLinks, inferMessageGeneration } from "../src/lib/message-generations";
-import type { Animation, Asset, Message } from "../src/lib/types";
+import { contentWithoutSpriteOutputLinks, inferMessageGeneration, inferMessagePack } from "../src/lib/message-generations";
+import type { Animation, Asset, AssetPack, Message } from "../src/lib/types";
 
 const asset = (id: string, name: string): Asset => ({
   id, name, workspaceId: "workspace", path: `/workspace/assets/creatures/${name}.png`,
@@ -44,5 +44,12 @@ describe("contentWithoutSpriteOutputLinks", () => {
     expect(cleaned).toContain("[Documentation](https://example.com/docs)");
     expect(cleaned).not.toContain("assets/creatures");
     expect(cleaned).not.toContain("Animated preview");
+  });
+});
+
+describe("inferMessagePack", () => {
+  test("restores one grouped pack component from the pack name", () => {
+    const packs: AssetPack[] = [{id:"forest-animals",name:"Forest Animals",description:"A coordinated set",style:"pixel art",kind:"animals",files:["assets/creatures/fox.png"],createdAt:"now"}];
+    expect(inferMessagePack(message("Created the Forest Animals pack."),packs)?.pack.id).toBe("forest-animals");
   });
 });

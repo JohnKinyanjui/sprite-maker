@@ -231,7 +231,7 @@ SQLite stores project metadata, conversations, worktrees, asset versions, timeli
 
 ## Project status
 
-Sprite Studio `0.2.1` is an early public release. The core desktop workflow works, but file formats, provider adapters, and generation harnesses will continue to evolve.
+Sprite Studio `0.2.3` is an early public release. The core desktop workflow works, but file formats, provider adapters, and generation harnesses will continue to evolve.
 
 ## Contributing and governance
 

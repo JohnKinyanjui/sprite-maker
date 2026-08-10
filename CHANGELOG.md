@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.3 — 2026-08-10
+
+### Asset packs
+
+- Removed the 12-item pack ceiling. Explicit pack counts are now treated as hard deliverables and larger packs are generated in visually consistent batches under one manifest.
+- Added a grouped asset-pack component directly in chat instead of presenting pack items as animation frames or raw workspace links.
+- Kept users in the active chat when pack generation completes; the pack library opens only through an intentional **View sprites** action.
+- Made pack recovery reliable when multiple chats generate concurrently by associating completed messages with the pack created by that request.
+
+### Browsing and animation handoff
+
+- Added a dedicated per-pack sprite grid with search and independent asset selection, avoiding the grouped-animation route.
+- Added zoomable inspection, individual sprite downloads, and an explicit **Animate in chat** handoff for every pack item.
+- Fixed weapon names such as `battle_axe` being mistaken for bats and receiving flying motion suggestions.
+
+### Quality
+
+- Added regression coverage for grouped pack-message recovery.
+- Verified the pack grid, sprite viewer, and animation handoff against a generated eight-item armour and weapons pack.
+
 ## 0.2.1 — 2026-08-10
 
 ### Fixed

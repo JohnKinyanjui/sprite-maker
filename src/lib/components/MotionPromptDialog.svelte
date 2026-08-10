@@ -16,7 +16,8 @@
   const suggestions = $derived(
     /rabbit|bunny|hare/.test(lower) ? ["Hop forward", "Run with bounding leaps", "Idle with ear and nose motion", "Pounce"] :
     /centipede|millipede|worm/.test(lower) ? ["Crawl with a leg wave", "Scuttle quickly", "Rear up and attack", "Idle antenna motion"] :
-    /bird|bat|wing/.test(lower) ? ["Fly with a wing cycle", "Take off", "Land", "Idle wing flutter"] :
+    /(?:^|[^a-z])(?:bird|bat|wing)(?:$|[^a-z])/.test(lower) ? ["Fly with a wing cycle", "Take off", "Land", "Idle wing flutter"] :
+    /axe|bow|dagger|mace|staff|sword|spear|hammer|weapon/.test(lower) ? ["Swing or strike", "Raise and ready", "Recoil after impact", "Idle glint"] :
     /tree|plant|flower|grass|bush/.test(lower) ? ["Sway in the wind", "Rustle gently", "React to an impact", "Grow or bloom"] :
     /chest|box/.test(lower) ? ["Open and settle", "Close", "Bounce when unlocked", "Shake while locked"] :
     /door|gate/.test(lower) ? ["Open on its hinge", "Close", "Rattle", "Break apart"] :

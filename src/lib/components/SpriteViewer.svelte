@@ -1,12 +1,13 @@
 <script lang="ts">
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import { ExternalLink, Minus, Plus, Play, RotateCcw, X } from "lucide-svelte";
+  import { Download, ExternalLink, Minus, Plus, Play, RotateCcw, X } from "lucide-svelte";
   import { assetUrl } from "$lib/api";
   import type { Asset } from "$lib/types";
 
-  let { asset, onAnimate, onClose }: {
+  let { asset, onAnimate, onDownload, onClose }: {
     asset: Asset;
     onAnimate: (asset: Asset) => void | Promise<void>;
+    onDownload: (asset: Asset) => void | Promise<void>;
     onClose: () => void;
   } = $props();
 
@@ -70,7 +71,8 @@
         </dl>
         <p class="path">{asset.relativePath}</p>
         <div class="actions">
-          <button class="primary" onclick={() => onAnimate(asset)}><Play size={13}/> Animate this</button>
+          <button class="primary" onclick={() => onAnimate(asset)}><Play size={13}/> Animate in chat</button>
+          <button onclick={() => onDownload(asset)}><Download size={13}/> Download sprite</button>
           <button onclick={() => revealItemInDir(asset.path)}><ExternalLink size={13}/> Reveal on disk</button>
         </div>
         {#if asset.category === "terrain"}<div class="terrain-note"><strong>Complete terrain atlas</strong><span>The atlas stays as one image. Tile separation is left to the user or a future slicing workflow.</span></div>{/if}

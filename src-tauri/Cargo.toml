@@ -1,6 +1,6 @@
 [package]
 name = "sprite-maker"
-version = "0.2.1"
+version = "0.2.3"
 description = "Local-first AI game asset development environment"
 authors = ["Sprite Studio contributors"]
 edition = "2021"

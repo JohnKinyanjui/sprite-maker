@@ -69,9 +69,11 @@ jobs:
           tagName: v__VERSION__
           releaseName: Sprite Studio v__VERSION__
           releaseBody: |
-            Sprite Studio v__VERSION__ fixes the in-chat handoff for generated sprites and animations.
+            Sprite Studio v__VERSION__ makes coordinated asset packs scalable, easy to inspect, and ready for animation.
 
-            Generated results now recover as playable sprite cards even when parallel chats change the latest-generation manifest. Redundant workspace links are removed when a card is available, Markdown paths no longer navigate the app to a 404 page, and inline animation previews loop continuously at their configured FPS instead of stopping after one frame.
+            Pack requests now honor explicit item counts beyond 12 by generating consistent batches under one pack manifest. Completed packs stay in chat as one grouped component instead of redirecting to another tab or appearing as animation frames.
+
+            **View sprites** opens a dedicated searchable grid. Every item can be inspected with pixel-accurate zoom, downloaded individually, or carried into chat as the exact source for a new animation. This release also fixes concurrent pack-message recovery and prevents weapon names such as `battle_axe` from receiving flying motion suggestions.
 
             Download the installer for your platform below. Native builds are provided for Windows, Linux, Apple Silicon Macs, and Intel Macs. See CHANGELOG.md for complete details.
           releaseDraft: false

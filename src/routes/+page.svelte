@@ -24,9 +24,9 @@
   import { normalizeGenerationProfile, slashCommand } from "$lib/generation-profiles";
   import { buildSpriteGroups, type SpriteGroup } from "$lib/sprite-groups";
   import { parseConversationStyle, parseStylePreset, stylePreset, type ConversationStyleId, type StylePresetId } from "$lib/style-presets";
-  import { errorMessage, type Animation, type AnimationPolishMode, type AnimationTemplate, type Asset, type AssetPack, type ChatGenerationProfile, type Conversation, type Message, type ProviderEvent, type ProviderRequestOptions, type ProviderStatus, type ReferenceCategory, type ReferenceImage, type SpriteGenerationMetadata, type SpriteSlashCommand, type TemplateApplication, type Workspace, type Worktree, type WorktreeKind } from "$lib/types";
+  import { errorMessage, type Animation, type AnimationPolishMode, type AnimationTemplate, type Asset, type AssetPack, type ChatGenerationProfile, type Conversation, type Message, type PackGenerationMetadata, type ProviderEvent, type ProviderRequestOptions, type ProviderStatus, type ReferenceCategory, type ReferenceImage, type SpriteGenerationMetadata, type SpriteSlashCommand, type TemplateApplication, type Workspace, type Worktree, type WorktreeKind } from "$lib/types";
 
-  type ActiveChatRequest = { id:string; conversationId:string; workspaceId:string; worktreeId?:string; prompt:string; command?:SpriteSlashCommand; generation:ProviderRequestOptions["generation"]; knownAssetIds:string[] };
+  type ActiveChatRequest = { id:string; conversationId:string; workspaceId:string; worktreeId?:string; prompt:string; command?:SpriteSlashCommand; generation:ProviderRequestOptions["generation"]; knownAssetIds:string[]; knownPackIds:string[] };
 
   let loading = $state(true);
   let workspaces = $state<Workspace[]>([]);
@@ -41,6 +41,7 @@
   let assets = $state<Asset[]>([]);
   let packs = $state<AssetPack[]>([]);
   let packFilter = $state("");
+  let selectedPackId = $state("");
   let selectedAsset = $state<Asset>();
   let viewedAsset = $state<Asset>();
   let motionAsset = $state<Asset>();
@@ -221,7 +222,7 @@
       else if(worktree?.kind==="tileset")activityByConversation={...activityByConversation,[conversation.id]:["AI is planning one complete terrain atlas","Output will be one PNG containing compatible fills, edges, corners, strips, and transitions"]};
       else if(generation.frameMode==="auto")activityByConversation={...activityByConversation,[conversation.id]:["AI is inspecting the reference and will recommend a frame count",`Allowed range: ${generation.minFrames}–${generation.maxFrames} frames`]};
       const requestId=await api.startProviderMessage(conversation.id,prompt,context,options);
-      runningRequests={...runningRequests,[conversation.id]:{id:requestId,conversationId:conversation.id,workspaceId:workspace.id,worktreeId:worktree?.id,prompt,command,generation,knownAssetIds:assets.map(asset=>asset.id)}};
+      runningRequests={...runningRequests,[conversation.id]:{id:requestId,conversationId:conversation.id,workspaceId:workspace.id,worktreeId:worktree?.id,prompt,command,generation,knownAssetIds:assets.map(asset=>asset.id),knownPackIds:packs.map(pack=>pack.id)}};
       if(selectedConversation?.id===conversation.id)messages=await api.listMessages(conversation.id);
       if(conversation.title==="New conversation"){
         const title=prompt.trim().replace(/^\/[a-z]+\s*/i,"").replace(/\s+/g," ").slice(0,42)||"New conversation";
@@ -234,12 +235,15 @@
   async function finalizeChatGeneration(request:ActiveChatRequest,response:string){
     if(!workspace||workspace.id!==request.workspaceId)return;
     const nextAssets=await api.scanAssets(request.workspaceId);const known=new Set(request.knownAssetIds);const created=nextAssets.filter(asset=>!known.has(asset.id));
+    const nextPacks=await api.listAssetPacks(request.workspaceId).catch(()=>packs);const knownPacks=new Set(request.knownPackIds);const createdPacks=nextPacks.filter(pack=>!knownPacks.has(pack.id));
     const responseText=response.toLowerCase();const mentioned=created.filter(asset=>responseText.includes(asset.path.toLowerCase())||responseText.includes(asset.relativePath.toLowerCase())||responseText.includes(asset.name.toLowerCase()));
+    const generatedPack=request.command==="pack"?(createdPacks.find(pack=>responseText.includes(pack.name.toLowerCase())||responseText.includes(pack.id.toLowerCase())||pack.files.some(file=>responseText.includes(file.toLowerCase())))??(createdPacks.length===1?createdPacks[0]:undefined)):undefined;
     const manifest=await api.getGenerationManifest(request.workspaceId).catch(()=>null);
     const manifestMatches=Boolean(manifest&&(responseText.includes(manifest.name.toLowerCase())||manifest.files.some(path=>responseText.includes(path.toLowerCase()))));
     const manifestAssets=manifestMatches?manifest!.files.map(path=>nextAssets.find(asset=>asset.relativePath===path)).filter((asset):asset is Asset=>Boolean(asset)):[];
     const otherRunning=Object.values(runningRequests).filter(value=>value.id!==request.id&&value.workspaceId===request.workspaceId).length;
-    const related=manifestAssets.length?manifestAssets:mentioned.length?mentioned:(otherRunning===0?created:[]);assets=nextAssets;
+    const packAssets=generatedPack?.files.map(path=>nextAssets.find(asset=>asset.relativePath===path)).filter((asset):asset is Asset=>Boolean(asset))??[];
+    const related=packAssets.length?packAssets:manifestAssets.length?manifestAssets:mentioned.length?mentioned:(otherRunning===0?created:[]);assets=nextAssets;
     if(request.worktreeId&&related.length)await Promise.all(related.map(asset=>api.linkAssetToWorktree(request.worktreeId!,asset.id)));
     let animationId:string|undefined;
     const ordered=manifestAssets.length?[...related]:[...related].sort((a,b)=>a.relativePath.localeCompare(b.relativePath,undefined,{numeric:true}));
@@ -251,8 +255,8 @@
       const requestMessages=await api.listMessages(request.conversationId);const assistant=requestMessages.findLast(message=>message.role==="assistant"&&message.status==="completed");
       if(assistant){const generation:SpriteGenerationMetadata={kind:"sprite-generation",name:ordered[0].name.replace(/[_-]?\d+$/i,""),category:ordered[0].category,fps:ordered.length>1?request.generation.fps:1,assetIds:ordered.map(asset=>asset.id),animationId};await api.updateMessageMetadata(assistant.id,{...assistant.metadata,generation});}
     }
-    packs=await api.listAssetPacks(request.workspaceId).catch(()=>packs);
-    if(request.command==="pack"&&selectedConversation?.id===request.conversationId)activeTab="packs";
+    if(generatedPack){const requestMessages=await api.listMessages(request.conversationId);const assistant=requestMessages.findLast(message=>message.role==="assistant"&&message.status==="completed");if(assistant){const packGeneration:PackGenerationMetadata={kind:"pack-generation",packId:generatedPack.id};await api.updateMessageMetadata(assistant.id,{...assistant.metadata,packGeneration});}}
+    packs=nextPacks;
     if(selectedWorktree?.id===request.worktreeId){worktreeAssetIds=request.worktreeId?await api.listWorktreeAssetIds(request.worktreeId):[];animations=await api.listAnimations(request.workspaceId,request.worktreeId);selectedAnimation=animations[0];}
   }
   async function refreshCreatedAssets() {
@@ -334,7 +338,8 @@
   }
   function selectTab(value:string){activeTab=value;}
   function selectAsset(asset:Asset){selectedAsset=asset;}
-  function viewPack(pack:AssetPack){packFilter=pack.id;selectedAsset=undefined;activeTab="sprites";}
+  function viewPack(pack:AssetPack){selectedPackId=pack.id;selectedAsset=undefined;viewedAsset=undefined;activeTab="packs";}
+  function openPackFromChat(pack:AssetPack){viewPack(pack);}
   function openPackAsset(asset:Asset){selectedAsset=asset;viewedAsset=asset;}
   async function openSpriteGroup(group:SpriteGroup){
     if(group.frames.length===1){selectedAsset=group.preview;viewedAsset=group.preview;return;}
@@ -405,13 +410,13 @@
       {#if sidebarOpen}<button class="workspace-menu-button" onclick={()=>{renameValue=workspace?.name??"";workspaceMenu=true}} title="Workspace options"><MoreHorizontal size={14}/></button>{/if}
       <WorkspaceTabs active={activeTab} conversationTitle={selectedConversation?.title} worktreeName={selectedWorktree?.name} assetCount={spriteCount} referenceCount={references.length} animationCount={animations.length} packCount={visiblePacks.length} showVfx={selectedWorktree?.kind==="vfx"} onSelect={selectTab}/>
       <div class="tab-stack">
-        <div class="tab-panel" class:active={activeTab==="chat"} aria-hidden={activeTab!=="chat"}>{#key selectedConversation?.id}<ConversationView conversation={selectedConversation} {messages} provider={currentProvider} runningRequestId={currentRequest?.id} activity={currentActivity} {selectedAsset} {assets} {animations} {references} {activeReferenceIds} {focusedReferenceId} draftPrompt={chatDraft} onDraftConsumed={()=>chatDraft=""} workspacePath={workspace.path} {workspaceStyle} {conversationStyle} {generationProfile} onSend={send} onCancel={cancel} onClearAsset={()=>selectedAsset=undefined} onEditAsset={editAssetFromChat} onEditAnimation={editAnimationFromChat} onExportAsset={exportAssetFromChat} onExportAnimation={exportAnimationFromChat} onConversationStyle={changeConversationStyle} onGenerationProfile={changeGenerationProfile} onAttachReferencePaths={attachReferencePaths} onAttachReferenceFiles={attachReferenceFiles} onFocusReference={focusConversationReference} onRemoveReference={removeConversationReference} onLinkError={(message)=>notify(message,"error")}/>{/key}</div>
+        <div class="tab-panel" class:active={activeTab==="chat"} aria-hidden={activeTab!=="chat"}>{#key selectedConversation?.id}<ConversationView conversation={selectedConversation} {messages} provider={currentProvider} runningRequestId={currentRequest?.id} activity={currentActivity} {selectedAsset} {assets} {animations} packs={visiblePacks} {references} {activeReferenceIds} {focusedReferenceId} draftPrompt={chatDraft} onDraftConsumed={()=>chatDraft=""} workspacePath={workspace.path} {workspaceStyle} {conversationStyle} {generationProfile} onSend={send} onCancel={cancel} onClearAsset={()=>selectedAsset=undefined} onEditAsset={editAssetFromChat} onEditAnimation={editAnimationFromChat} onViewPack={openPackFromChat} onExportAsset={exportAssetFromChat} onExportAnimation={exportAnimationFromChat} onConversationStyle={changeConversationStyle} onGenerationProfile={changeGenerationProfile} onAttachReferencePaths={attachReferencePaths} onAttachReferenceFiles={attachReferenceFiles} onFocusReference={focusConversationReference} onRemoveReference={removeConversationReference} onLinkError={(message)=>notify(message,"error")}/>{/key}</div>
         <div class="tab-panel" class:active={activeTab==="sprites"} aria-hidden={activeTab!=="sprites"}><AssetBrowser workspaceId={workspace.id} worktreeId={selectedWorktree?.id} assets={visibleAssets} {animations} packs={visiblePacks} packId={packFilter} selectedAssetId={selectedAsset?.id} onAssets={(value)=>assets=value} onSelect={selectAsset} onOpen={openSpriteGroup} onPack={(value)=>packFilter=value} onLinked={async()=>{if(selectedWorktree)worktreeAssetIds=await api.listWorktreeAssetIds(selectedWorktree.id)}} onError={(message)=>notify(message,"error")}/></div>
         <div class="tab-panel" class:active={activeTab==="references"} aria-hidden={activeTab!=="references"}>{#if selectedWorktree}<ReferenceLibrary worktreeId={selectedWorktree.id} conversationId={selectedConversation?.id} {references} activeIds={activeReferenceIds} maximumActive={currentProvider?.capabilities.maximumReferenceImages ?? 0} onReferences={(value)=>references=value} onActiveIds={(value)=>activeReferenceIds=value} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>{/if}</div>
         <div class="tab-panel" class:active={activeTab==="animate"} aria-hidden={activeTab!=="animate"}><AnimationEditor workspaceId={workspace.id} worktreeId={activeWorktreeId()} assets={visibleAssets} {animations} templates={animationTemplates} {selectedAnimation} active={activeTab==="animate"} onAnimations={(value)=>animations=value} onTemplates={(value)=>animationTemplates=value} onSelected={(value)=>selectedAnimation=value} onTemplateApplication={prepareTemplateInChat} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/></div>
         {#if selectedWorktree?.kind==="vfx"}<div class="tab-panel" class:active={activeTab==="vfx"} aria-hidden={activeTab!=="vfx"}><VfxStudio workspaceId={workspace.id} worktreeId={selectedWorktree.id} {animations} assets={visibleAssets} active={activeTab==="vfx"} onCreated={refreshVfxAssets} onOpenSheets={openVfxSheet} onGenerate={generateVfxFromStudio} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/></div>{/if}
         <div class="tab-panel" class:active={activeTab==="sheets"} aria-hidden={activeTab!=="sheets"}><SpriteSheetStudio workspaceId={workspace.id} worktreeId={activeWorktreeId()} {animations} assets={visibleAssets} active={activeTab==="sheets"} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/></div>
-        <div class="tab-panel" class:active={activeTab==="packs"} aria-hidden={activeTab!=="packs"}><PackLibrary packs={visiblePacks} assets={visibleAssets} onView={viewPack} onOpen={openPackAsset}/></div>
+        <div class="tab-panel" class:active={activeTab==="packs"} aria-hidden={activeTab!=="packs"}><PackLibrary packs={visiblePacks} assets={visibleAssets} {selectedPackId} onView={viewPack} onBack={()=>selectedPackId=""} onOpen={openPackAsset}/></div>
         <div class="tab-panel" class:active={activeTab==="play"} aria-hidden={activeTab!=="play"}><TestRoom {animations} assets={visibleAssets} {selectedAnimation} active={activeTab==="play"}/></div>
       </div>
     </section>
@@ -421,7 +426,7 @@
 
 {#if settingsOpen}<SettingsModal {providers} {theme} {workspaceStyle} onTheme={changeTheme} onWorkspaceStyle={changeWorkspaceStyle} onRefresh={refreshProviders} onClose={()=>settingsOpen=false}/>{/if}
 {#if worktreeDialog}<WorktreeDialog busy={creatingWorktree} onCreate={createWorktree} onClose={()=>worktreeDialog=false}/>{/if}
-{#if viewedAsset}<SpriteViewer asset={viewedAsset} onAnimate={animateViewedAsset} onClose={()=>viewedAsset=undefined}/>{/if}
+{#if viewedAsset}<SpriteViewer asset={viewedAsset} onAnimate={animateViewedAsset} onDownload={exportAssetFromChat} onClose={()=>viewedAsset=undefined}/>{/if}
 {#if motionAsset}<MotionPromptDialog asset={motionAsset} onContinue={(motion,polishMode)=>prepareMotionInChat(motionAsset!,motion,polishMode)} onClose={()=>motionAsset=undefined}/>{/if}
 {#if workspaceMenu && workspace}<div class="backdrop" role="presentation" onclick={(event)=>event.target===event.currentTarget&&(workspaceMenu=false)}><div class="workspace-dialog"><header><div><p>WORKSPACE</p><h2>Manage {workspace.name}</h2></div><button onclick={()=>workspaceMenu=false}><X size={15}/></button></header><label>Name<div><input bind:value={renameValue}/><button onclick={renameWorkspace}><Pencil size={12}/>Rename</button></div></label><p class="path">{workspace.path}</p><div class="danger-actions"><button onclick={()=>removeWorkspace(false)}><FolderMinus size={13}/>Remove from app</button><button onclick={()=>removeWorkspace(true)}><Trash2 size={13}/>Delete files…</button></div></div></div>{/if}
 {#if toast}<div class="toast" class:error={toast.kind==="error"}><span></span><p>{toast.message}</p><button onclick={()=>toast=undefined}><X size={12}/></button></div>{/if}

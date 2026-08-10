@@ -750,7 +750,9 @@ mod tests {
             Some("pack"),
         );
         assert!(prompt.contains("ASSET PACK HARNESS"));
-        assert!(prompt.contains("4–12 **static, individually usable game assets**"));
+        assert!(prompt.contains("do not cap it at 12"));
+        assert!(prompt.contains("exactly the requested total"));
+        assert!(prompt.contains("do not print raw folder links or individual asset links"));
         assert!(prompt.contains("Do not turn pack items into animation frames"));
         assert!(prompt.contains(".sprite-studio/packs/<pack-id>.json"));
         assert!(prompt.contains("explicit style overrides the saved preset"));
