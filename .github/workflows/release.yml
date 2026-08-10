@@ -69,11 +69,11 @@ jobs:
           tagName: v__VERSION__
           releaseName: Sprite Studio v__VERSION__
           releaseBody: |
-            Sprite Studio v__VERSION__ is a major workflow update for creating production-ready 2D game art locally.
+            Sprite Studio v__VERSION__ fixes the in-chat handoff for generated sprites and animations.
 
-            Highlights include anatomy-aware rigging, deterministic frame rendering, optional regional AI polish, physical motion planning, seamless loop validation, complete terrain atlases, coordinated asset packs, chat-scoped image references, Markdown previews, concurrent chat generation, a zoomable sprite viewer, and per-chat generation controls with interpolation enabled by default.
+            Generated results now recover as playable sprite cards even when parallel chats change the latest-generation manifest. Redundant workspace links are removed when a card is available, Markdown paths no longer navigate the app to a 404 page, and inline animation previews loop continuously at their configured FPS instead of stopping after one frame.
 
-            Download the installer for your platform below. Native builds are provided for Windows, Linux, Apple Silicon Macs, and Intel Macs. See the repository changelog for the complete update notes.
+            Download the installer for your platform below. Native builds are provided for Windows, Linux, Apple Silicon Macs, and Intel Macs. See CHANGELOG.md for complete details.
           releaseDraft: false
           prerelease: true
           args: ${{ matrix.args }}

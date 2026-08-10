@@ -3,6 +3,7 @@
   import { ArrowUp, Bot, Square, Sparkles, Terminal, Paperclip, AlertTriangle, Check, ChevronDown, X, WandSparkles, Clapperboard, Image, UserRound, Zap, BookImage, Crosshair, Unlock, Boxes } from "lucide-svelte";
   import { assetUrl } from "$lib/api";
   import SpriteArtifactCard from "$lib/components/SpriteArtifactCard.svelte";
+  import { contentWithoutSpriteOutputLinks, inferMessageGeneration } from "$lib/message-generations";
   import StylePicker from "$lib/components/StylePicker.svelte";
   import GenerationProfileMenu from "$lib/components/GenerationProfileMenu.svelte";
   import MarkdownMessage from "$lib/components/MarkdownMessage.svelte";
@@ -10,15 +11,15 @@
   import { stylePreset, type ConversationStyleId, type StylePresetId } from "$lib/style-presets";
   import type { Animation, Asset, ChatGenerationProfile, Conversation, Message, ProviderStatus, ReferenceImage, SpriteGenerationMetadata } from "$lib/types";
 
-  let { conversation, messages, provider, runningRequestId, activity, selectedAsset, assets, animations, references, activeReferenceIds, focusedReferenceId, draftPrompt="", workspaceStyle, conversationStyle, generationProfile, onSend, onCancel, onClearAsset, onEditAsset, onEditAnimation, onExportAsset, onExportAnimation, onConversationStyle, onGenerationProfile, onAttachReferencePaths, onAttachReferenceFiles, onFocusReference, onRemoveReference, onDraftConsumed }: {
+  let { conversation, messages, provider, runningRequestId, activity, selectedAsset, assets, animations, references, activeReferenceIds, focusedReferenceId, draftPrompt="", workspacePath, workspaceStyle, conversationStyle, generationProfile, onSend, onCancel, onClearAsset, onEditAsset, onEditAnimation, onExportAsset, onExportAnimation, onConversationStyle, onGenerationProfile, onAttachReferencePaths, onAttachReferenceFiles, onFocusReference, onRemoveReference, onDraftConsumed, onLinkError }: {
     conversation?: Conversation; messages: Message[]; provider?: ProviderStatus; runningRequestId?: string; activity: string[]; selectedAsset?: Asset; assets: Asset[]; animations: Animation[];
     references: ReferenceImage[]; activeReferenceIds: string[]; focusedReferenceId?: string;
-    draftPrompt?: string;
+    draftPrompt?: string; workspacePath: string;
     workspaceStyle: StylePresetId; conversationStyle: ConversationStyleId; generationProfile: ChatGenerationProfile;
     onSend: (prompt: string) => Promise<void>; onCancel: () => void; onClearAsset: () => void; onEditAsset: (asset: Asset) => void; onEditAnimation: (animation: Animation) => void; onExportAsset: (asset: Asset) => Promise<void>; onExportAnimation: (animation: Animation) => Promise<void>; onConversationStyle: (style: ConversationStyleId) => void | Promise<void>;
     onGenerationProfile: (profile: ChatGenerationProfile) => void | Promise<void>;
     onAttachReferencePaths: (paths: string[]) => Promise<void>; onAttachReferenceFiles: (files: File[]) => Promise<void>; onFocusReference: (id?: string) => Promise<void>; onRemoveReference: (id: string) => Promise<void>;
-    onDraftConsumed: () => void;
+    onDraftConsumed: () => void; onLinkError: (message: string) => void;
   } = $props();
   let prompt = $state("");
   let sending = $state(false);
@@ -90,19 +91,12 @@
   }
 
   function generationFor(message: Message): SpriteGenerationMetadata | undefined {
-    const value = message.metadata.generation;
-    if (!value || typeof value !== "object" || !("kind" in value) || value.kind !== "sprite-generation") return;
-    return value as SpriteGenerationMetadata;
+    return inferMessageGeneration(message, assets, animations);
   }
 
   function visibleContent(message: Message, generation?: SpriteGenerationMetadata): string {
     if (!generation) return message.content;
-    return message.content
-      .replace(/\s*[-·]?\s*\[Frame\s+\d+\]\([^)]+\.png\)/gi, "")
-      .replace(/^The source \[Sprite Studio spec\].*$/gim, "")
-      .replace(/\*\*([^*]+)\*\*/g, "$1")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    return contentWithoutSpriteOutputLinks(message.content);
   }
 </script>
 
@@ -128,7 +122,7 @@
             <div class="avatar">{#if message.role === "user"}<span>You</span>{:else}<Bot size={15} />{/if}</div>
             <div class="message-body">
               <div class="message-meta"><strong>{message.role === "user" ? "You" : "Codex"}</strong><time>{new Date(message.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</time></div>
-              {#if message.content}<div class="content"><MarkdownMessage content={visibleContent(message,generation)}/></div>{/if}
+              {#if message.content}<div class="content"><MarkdownMessage content={visibleContent(message,generation)} {workspacePath} {onLinkError}/></div>{/if}
               {#if generation}<SpriteArtifactCard {generation} {assets} {animations} {onEditAsset} {onEditAnimation} {onExportAsset} {onExportAnimation}/>{/if}
               {#if message.status === "running"}
                 <div class="working"><span class="spinner"></span> Working in workspace</div>

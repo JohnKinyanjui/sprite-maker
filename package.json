@@ -1,6 +1,6 @@
 {
   "name": "sprite-maker",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A local-first AI game asset development environment",
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "bun test",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri"
   },
