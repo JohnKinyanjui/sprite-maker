@@ -1,6 +1,6 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
-  import { FolderOpen, Plus, ArrowRight, HardDrive, Bot, Box, MoreHorizontal, Pencil, FolderMinus, Trash2, X } from "lucide-svelte";
+  import { ArchiveRestore, FolderOpen, Plus, ArrowRight, HardDrive, Bot, Box, MoreHorizontal, Pencil, FolderMinus, Trash2, X } from "lucide-svelte";
   import LogoMark from "$lib/components/LogoMark.svelte";
   import { api } from "$lib/api";
   import { errorMessage, type Workspace } from "$lib/types";
@@ -46,6 +46,17 @@
     catch (error) { onError(errorMessage(error)); }
   }
 
+  async function importBackup() {
+    const backup = await open({ directory: true, multiple: false, title: "Choose a .sprite-studio-backup folder" });
+    if (typeof backup !== "string") return;
+    const destination = await open({ directory: true, multiple: false, title: "Choose an empty folder for the restored project" });
+    if (typeof destination !== "string") return;
+    busy = true;
+    try { onCreated(await api.importProjectBackup(backup, destination)); }
+    catch (error) { onError(errorMessage(error)); }
+    finally { busy = false; }
+  }
+
   function manage(workspace: Workspace) {
     workspaceMenu = undefined;
     managedWorkspace = workspace;
@@ -89,6 +100,7 @@
     <div class="actions">
       <button class="primary" onclick={() => creating = true}><Plus size={16} /> New workspace</button>
       <button onclick={openExisting}><FolderOpen size={16} /> Open folder</button>
+      <button onclick={importBackup} disabled={busy}><ArchiveRestore size={16} /> {busy ? "Restoring…" : "Restore backup"}</button>
     </div>
     <div class="principles">
       <span><HardDrive size={14} /> Local files</span><span><Bot size={14} /> Bring your AI</span><span><Box size={14} /> Engine-ready exports</span>

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { MessageSquare, Images, BookImage, Clapperboard, Grid3X3, Gamepad2, Keyboard, Sparkles, Boxes } from "lucide-svelte";
+  import { MessageSquare, Images, BookImage, Clapperboard, Grid3X3, Gamepad2, Keyboard, Sparkles, Boxes, Map } from "lucide-svelte";
 
-  let { active, conversationTitle, worktreeName, assetCount, referenceCount, animationCount, packCount = 0, showVfx = false, onSelect }: {
-    active: string; conversationTitle?: string; worktreeName?: string; assetCount: number; referenceCount: number; animationCount: number; packCount?: number; showVfx?: boolean;
+  let { active, conversationTitle, worktreeName, assetCount, referenceCount, animationCount, packCount = 0, showVfx = false, showTerrain = false, onSelect }: {
+    active: string; conversationTitle?: string; worktreeName?: string; assetCount: number; referenceCount: number; animationCount: number; packCount?: number; showVfx?: boolean; showTerrain?: boolean;
     onSelect: (tab: string) => void;
   } = $props();
 
@@ -12,6 +12,7 @@
     { id: "references", label: "References", icon: BookImage, meta: String(referenceCount) },
     { id: "animate", label: "Animate", icon: Clapperboard, meta: String(animationCount) },
     ...(showVfx?[{ id: "vfx", label: "VFX", icon: Sparkles, meta: "" }]:[]),
+    ...(showTerrain?[{ id: "terrain", label: "Terrain", icon: Map, meta: "" }]:[]),
     { id: "sheets", label: "Sheets", icon: Grid3X3, meta: "" },
     { id: "packs", label: "Packs", icon: Boxes, meta: String(packCount) },
     { id: "play", label: "Playground", icon: Gamepad2, meta: "" },

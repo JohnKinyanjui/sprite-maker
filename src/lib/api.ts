@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { Animation, AnimationInput, AnimationTemplate, Asset, AssetPack, AssetVersion, BackgroundJob, Conversation, ExportResult, FrameOptimizationResult, GenerationManifest, Message, MotionPlan, ProceduralVfxInput, ProviderRequestOptions, ProviderStatus, QualityReport, ReferenceCategory, ReferenceImage, SpriteSheet, SpriteSheetInput, TemplateApplication, VfxEffect, Workspace, Worktree, WorktreeKind } from "$lib/types";
+import type { Animation, AnimationInput, AnimationTemplate, Asset, AssetPack, AssetVersion, BackgroundJob, Conversation, ExportResult, FrameOptimizationResult, GenerationManifest, Message, MotionPlan, ProceduralVfxInput, ProjectBackup, ProviderRequestOptions, ProviderStatus, QualityReport, ReferenceCategory, ReferenceImage, SpriteSheet, SpriteSheetInput, TemplateApplication, TerrainExportInput, TerrainExportResult, VfxEffect, Workspace, Worktree, WorktreeKind } from "$lib/types";
 
 export const api = {
   listWorkspaces: () => invoke<Workspace[]>("list_workspaces"),
@@ -9,16 +9,21 @@ export const api = {
   renameWorkspace: (id: string, name: string) => invoke<void>("rename_workspace", { id, name }),
   removeWorkspace: (id: string) => invoke<void>("remove_workspace", { id }),
   deleteWorkspace: (id: string) => invoke<void>("delete_workspace", { id }),
+  createProjectBackup: (projectId: string, destinationDirectory: string) => invoke<ProjectBackup>("create_project_backup", { projectId, destinationDirectory }),
+  restoreProjectBackup: (projectId: string, backupPath: string) => invoke<Workspace>("restore_project_backup", { projectId, backupPath }),
+  importProjectBackup: (backupPath: string, destinationPath: string) => invoke<Workspace>("import_project_backup", { backupPath, destinationPath }),
   listWorktrees: (projectId: string) => invoke<Worktree[]>("list_worktrees", { projectId }),
   createWorktree: (projectId: string, name: string, kind: WorktreeKind, description?: string) => invoke<Worktree>("create_worktree", { projectId, name, kind, description }),
-  updateWorktree: (id: string, name: string, description?: string) => invoke<Worktree>("update_worktree", { id, name, description }),
+  updateWorktree: (id: string, name: string, kind: WorktreeKind, description?: string) => invoke<Worktree>("update_worktree", { id, name, kind, description }),
   deleteWorktree: (id: string) => invoke<void>("delete_worktree", { id }),
   listWorktreeAssetIds: (worktreeId: string) => invoke<string[]>("list_worktree_asset_ids", { worktreeId }),
   linkAssetToWorktree: (worktreeId: string, assetId: string, relationship: "owned" | "referenced" = "owned") => invoke<void>("link_asset_to_worktree", { worktreeId, assetId, relationship }),
   listConversations: (workspaceId: string, worktreeId?: string) => invoke<Conversation[]>("list_conversations", { workspaceId, worktreeId: worktreeId ?? null }),
+  listArchivedConversations: (workspaceId: string) => invoke<Conversation[]>("list_archived_conversations", { workspaceId }),
   createConversation: (workspaceId: string, worktreeId?: string, title?: string, provider?: string) => invoke<Conversation>("create_conversation", { workspaceId, worktreeId: worktreeId ?? null, title, provider }),
   renameConversation: (id: string, title: string) => invoke<void>("rename_conversation", { id, title }),
   archiveConversation: (id: string) => invoke<void>("archive_conversation", { id }),
+  restoreConversation: (id: string) => invoke<Conversation>("restore_conversation", { id }),
   deleteConversation: (id: string) => invoke<void>("delete_conversation", { id }),
   listMessages: (conversationId: string) => invoke<Message[]>("list_messages", { conversationId }),
   updateMessageMetadata: (id: string, metadata: Record<string, unknown>) => invoke<void>("update_message_metadata", { id, metadata }),
@@ -33,7 +38,9 @@ export const api = {
   renameAsset: (id: string, name: string) => invoke<Asset>("rename_asset", { id, name }),
   deleteAsset: (id: string) => invoke<void>("delete_asset", { id }),
   exportAsset: (id: string) => invoke<ExportResult>("export_asset", { id }),
+  exportGodotTileset: (input: TerrainExportInput) => invoke<TerrainExportResult>("export_godot_tileset", { input }),
   listAssetVersions: (assetId: string) => invoke<AssetVersion[]>("list_asset_versions", { assetId }),
+  restoreAssetVersion: (assetId: string, versionId: string) => invoke<Asset>("restore_asset_version", { assetId, versionId }),
   listReferenceImages: (worktreeId: string) => invoke<ReferenceImage[]>("list_reference_images", { worktreeId }),
   importReferenceImage: (worktreeId: string, sourcePath: string, category: ReferenceCategory, notes?: string) => invoke<ReferenceImage>("import_reference_image", { worktreeId, sourcePath, category, notes }),
   importReferenceBytes: (worktreeId: string, fileName: string, bytes: number[], category: ReferenceCategory, notes?: string) => invoke<ReferenceImage>("import_reference_bytes", { worktreeId, fileName, bytes, category, notes }),

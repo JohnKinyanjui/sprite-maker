@@ -1,0 +1,43 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://godot/terrain_playtest.gd" id="1_script"]
+[ext_resource type="TileSet" path="res://exports/godot/lesser-antilles-volcanic-quay-tileset-v1-tileset/lesser-antilles-volcanic-quay-tileset-v1-tileset.tres" id="2_tileset"]
+
+[node name="TerrainPlaytest" type="Node2D"]
+script = ExtResource("1_script")
+
+[node name="Terrain" type="TileMapLayer" parent="."]
+position = Vector2(64, 86)
+scale = Vector2(4, 4)
+texture_filter = 1
+tile_set = ExtResource("2_tileset")
+
+[node name="Title" type="Label" parent="."]
+offset_left = 64.0
+offset_top = 20.0
+offset_right = 576.0
+offset_bottom = 45.0
+theme_override_colors/font_color = Color(0.92, 0.93, 0.88, 1)
+theme_override_font_sizes/font_size = 18
+text = "Terrain 47-tile auto-connect playtest"
+horizontal_alignment = 1
+
+[node name="Mode" type="Label" parent="."]
+offset_left = 64.0
+offset_top = 52.0
+offset_right = 576.0
+offset_bottom = 76.0
+theme_override_colors/font_color = Color(0.65, 0.76, 0.68, 1)
+theme_override_font_sizes/font_size = 13
+text = "Concave corners"
+horizontal_alignment = 1
+
+[node name="Instructions" type="Label" parent="."]
+offset_left = 64.0
+offset_top = 505.0
+offset_right = 576.0
+offset_bottom = 530.0
+theme_override_colors/font_color = Color(0.65, 0.69, 0.65, 1)
+theme_override_font_sizes/font_size = 13
+text = "Space cycles concave corners / islands / one-cell channels · Esc closes"
+horizontal_alignment = 1

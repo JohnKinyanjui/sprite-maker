@@ -109,8 +109,26 @@ fn content_hash(path: &Path) -> CommandResult<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+fn snapshot_version(root: &Path, asset: &Asset, version_number: i64) -> CommandResult<PathBuf> {
+    let extension = Path::new(&asset.path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or(asset.format.as_str());
+    let directory = root
+        .join(".sprite-studio")
+        .join("versions")
+        .join(&asset.id);
+    std::fs::create_dir_all(&directory)?;
+    let destination = directory.join(format!("v{version_number}.{extension}"));
+    if !destination.is_file() || content_hash(&destination)? != content_hash(Path::new(&asset.path))? {
+        std::fs::copy(&asset.path, &destination)?;
+    }
+    Ok(destination)
+}
+
 pub(crate) fn upsert(state: &AppState, asset: &Asset, change_kind: &str) -> CommandResult<()> {
     let hash = content_hash(Path::new(&asset.path))?;
+    let root = workspace_path(state, &asset.workspace_id)?;
     let mut connection = state
         .db
         .lock()
@@ -133,35 +151,42 @@ pub(crate) fn upsert(state: &AppState, asset: &Asset, change_kind: &str) -> Comm
         .optional()?;
     match latest {
         None => {
+            let snapshot = snapshot_version(&root, asset, 1)?;
             transaction.execute(
                 "INSERT INTO asset_versions(id, asset_id, version_number, path, format, width, height, file_size, has_alpha, content_hash, change_kind, available, selected, created_at) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, 1, ?11)",
-                params![Uuid::new_v4().to_string(), asset.id, asset.path, asset.format, asset.width, asset.height, asset.file_size as i64, asset.has_alpha, hash, change_kind, asset.created_at],
+                params![Uuid::new_v4().to_string(), asset.id, snapshot.to_string_lossy(), asset.format, asset.width, asset.height, asset.file_size as i64, asset.has_alpha, hash, change_kind, asset.created_at],
             )?;
         }
-        Some((version_id, _, previous_hash, _)) if previous_hash.is_empty() => {
+        Some((version_id, version_number, previous_hash, _)) if previous_hash.is_empty() => {
+            let snapshot = snapshot_version(&root, asset, version_number)?;
             transaction.execute(
                 "UPDATE asset_versions SET path=?1, format=?2, width=?3, height=?4, file_size=?5, has_alpha=?6, content_hash=?7, available=1, selected=1 WHERE id=?8",
-                params![asset.path, asset.format, asset.width, asset.height, asset.file_size as i64, asset.has_alpha, hash, version_id],
+                params![snapshot.to_string_lossy(), asset.format, asset.width, asset.height, asset.file_size as i64, asset.has_alpha, hash, version_id],
             )?;
         }
         Some((version_id, version_number, previous_hash, previous_path))
             if previous_hash != hash =>
         {
-            let previous_available =
-                previous_path != asset.path && Path::new(&previous_path).is_file();
+            let previous_available = Path::new(&previous_path).is_file();
+            let snapshot = snapshot_version(&root, asset, version_number + 1)?;
             transaction.execute(
                 "UPDATE asset_versions SET selected=0, available=?1 WHERE id=?2",
                 params![previous_available, version_id],
             )?;
             transaction.execute(
                 "INSERT INTO asset_versions(id, asset_id, version_number, parent_version_id, generation_id, path, format, width, height, file_size, has_alpha, content_hash, change_kind, available, selected, created_at) VALUES (?1, ?2, ?3, ?4, (SELECT generation_id FROM assets WHERE id=?2), ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 1, ?13)",
-                params![Uuid::new_v4().to_string(), asset.id, version_number + 1, version_id, asset.path, asset.format, asset.width, asset.height, asset.file_size as i64, asset.has_alpha, hash, change_kind, Utc::now().to_rfc3339()],
+                params![Uuid::new_v4().to_string(), asset.id, version_number + 1, version_id, snapshot.to_string_lossy(), asset.format, asset.width, asset.height, asset.file_size as i64, asset.has_alpha, hash, change_kind, Utc::now().to_rfc3339()],
             )?;
         }
-        Some((version_id, _, _, _)) => {
+        Some((version_id, version_number, _, version_path)) => {
+            let snapshot = if Path::new(&version_path).is_file() && version_path != asset.path {
+                PathBuf::from(version_path)
+            } else {
+                snapshot_version(&root, asset, version_number)?
+            };
             transaction.execute(
                 "UPDATE asset_versions SET path=?1, format=?2, width=?3, height=?4, file_size=?5, has_alpha=?6, available=1, selected=1 WHERE id=?7",
-                params![asset.path, asset.format, asset.width, asset.height, asset.file_size as i64, asset.has_alpha, version_id],
+                params![snapshot.to_string_lossy(), asset.format, asset.width, asset.height, asset.file_size as i64, asset.has_alpha, version_id],
             )?;
         }
     }
@@ -460,6 +485,73 @@ pub fn list_asset_versions(
 }
 
 #[tauri::command]
+pub fn restore_asset_version(
+    asset_id: String,
+    version_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Asset> {
+    restore_asset_version_record(&asset_id, &version_id, &state)
+}
+
+fn restore_asset_version_record(
+    asset_id: &str,
+    version_id: &str,
+    state: &AppState,
+) -> CommandResult<Asset> {
+    let asset = get_asset(state, asset_id)?;
+    let version: AssetVersion = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+        connection
+            .query_row(
+                "SELECT id, asset_id, version_number, parent_version_id, generation_id, path, format, width, height, file_size, has_alpha, content_hash, change_kind, available, selected, created_at FROM asset_versions WHERE id=?1 AND asset_id=?2",
+                params![version_id, asset_id],
+                asset_version_row,
+            )
+            .optional()?
+            .ok_or_else(|| CommandError::new("version_not_found", "Asset version no longer exists"))?
+    };
+    let source = PathBuf::from(&version.path);
+    if !version.available || !source.is_file() {
+        return Err(CommandError::new(
+            "version_unavailable",
+            "The pixels for this historical version are unavailable",
+        ));
+    }
+    if version.selected {
+        return Ok(asset);
+    }
+    let active = PathBuf::from(&asset.path);
+    let parent = active.parent().ok_or_else(|| {
+        CommandError::new("unsafe_restore", "Asset has no writable parent directory")
+    })?;
+    let temporary = parent.join(format!(".sprite-studio-restore-{}.tmp", Uuid::new_v4()));
+    let safety = parent.join(format!(".sprite-studio-current-{}.tmp", Uuid::new_v4()));
+    std::fs::copy(&source, &temporary)?;
+    ImageReader::open(&temporary)?.with_guessed_format()?.decode()?;
+    std::fs::rename(&active, &safety)?;
+    if let Err(error) = std::fs::rename(&temporary, &active) {
+        let _ = std::fs::rename(&safety, &active);
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    let mut asset_root = active.clone();
+    for _ in Path::new(&asset.relative_path).components() {
+        asset_root.pop();
+    }
+    let restored = inspect(&asset.workspace_id, &asset_root, &active, Some(asset.id.clone()))?;
+    if let Err(error) = upsert(state, &restored, "restored") {
+        let _ = std::fs::remove_file(&active);
+        let _ = std::fs::rename(&safety, &active);
+        return Err(error);
+    }
+    let _ = std::fs::remove_file(safety);
+    Ok(restored)
+}
+
+#[tauri::command]
 pub fn get_generation_manifest(
     workspace_id: String,
     state: State<'_, AppState>,
@@ -491,7 +583,7 @@ pub fn get_generation_manifest(
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect, safe_category, upsert};
+    use super::{inspect, restore_asset_version_record, safe_category, upsert};
     use crate::{database, AppState};
     use image::{Rgba, RgbaImage};
     use std::{collections::HashMap, sync::Mutex};
@@ -562,6 +654,46 @@ mod tests {
             )
             .expect("versions count");
         assert_eq!(versions, 2);
+        let available: i64 = state
+            .db
+            .lock()
+            .expect("database lock")
+            .query_row(
+                "SELECT COUNT(*) FROM asset_versions WHERE asset_id=?1 AND available=1",
+                [&first.id],
+                |row| row.get(0),
+            )
+            .expect("available version count");
+        assert_eq!(available, 2);
+        let first_version: String = state
+            .db
+            .lock()
+            .expect("database lock")
+            .query_row(
+                "SELECT id FROM asset_versions WHERE asset_id=?1 ORDER BY version_number LIMIT 1",
+                [&first.id],
+                |row| row.get(0),
+            )
+            .expect("first version id");
+        restore_asset_version_record(&first.id, &first_version, &state)
+            .expect("historical version restores");
+        let restored_pixel = image::open(&path)
+            .expect("restored image opens")
+            .to_rgba8()
+            .get_pixel(0, 0)
+            .0;
+        assert_eq!(restored_pixel, [255, 0, 0, 255]);
+        let restored_versions: i64 = state
+            .db
+            .lock()
+            .expect("database lock")
+            .query_row(
+                "SELECT COUNT(*) FROM asset_versions WHERE asset_id=?1",
+                [&first.id],
+                |row| row.get(0),
+            )
+            .expect("restored versions count");
+        assert_eq!(restored_versions, 3);
         drop(state);
         std::fs::remove_dir_all(root).expect("temporary fixture should be removable");
     }
