@@ -86,13 +86,11 @@ linux:
 	@set -eu; \
 	  destination='$(RELEASE_DIR)/linux'; \
 	  mkdir -p "$$destination"; \
-	  found=0; \
-	  for artifact in $(BUNDLE_DIR)/appimage/*.AppImage $(BUNDLE_DIR)/deb/*.deb $(BUNDLE_DIR)/rpm/*.rpm; do \
-	    [ -f "$$artifact" ] || continue; \
-	    cp "$$artifact" "$$destination/"; \
-	    found=1; \
-	  done; \
-	  [ "$$found" -eq 1 ] || { printf '%s\n' 'No Linux installers were produced by Tauri.' >&2; exit 1; }; \
+	  appimage=$$(find '$(BUNDLE_DIR)/appimage' -maxdepth 1 -type f -name '*.AppImage' -print -quit 2>/dev/null || true); \
+	  deb=$$(find '$(BUNDLE_DIR)/deb' -maxdepth 1 -type f -name '*.deb' -print -quit 2>/dev/null || true); \
+	  rpm=$$(find '$(BUNDLE_DIR)/rpm' -maxdepth 1 -type f -name '*.rpm' -print -quit 2>/dev/null || true); \
+	  [ -n "$$appimage" ] && [ -n "$$deb" ] && [ -n "$$rpm" ] || { printf '%s\n' 'Tauri must produce an AppImage, DEB, and RPM.' >&2; exit 1; }; \
+	  cp "$$appimage" "$$deb" "$$rpm" "$$destination/"; \
 	  printf 'Collected Linux artifacts in %s\n' "$$destination"
 
 windows:
@@ -100,11 +98,8 @@ windows:
 	@set -eu; \
 	  destination='$(RELEASE_DIR)/windows'; \
 	  mkdir -p "$$destination"; \
-	  found=0; \
-	  for artifact in $(BUNDLE_DIR)/nsis/*.exe $(BUNDLE_DIR)/msi/*.msi; do \
-	    [ -f "$$artifact" ] || continue; \
-	    cp "$$artifact" "$$destination/"; \
-	    found=1; \
-	  done; \
-	  [ "$$found" -eq 1 ] || { printf '%s\n' 'No Windows installers were produced by Tauri.' >&2; exit 1; }; \
+	  exe=$$(find '$(BUNDLE_DIR)/nsis' -maxdepth 1 -type f -name '*.exe' -print -quit 2>/dev/null || true); \
+	  msi=$$(find '$(BUNDLE_DIR)/msi' -maxdepth 1 -type f -name '*.msi' -print -quit 2>/dev/null || true); \
+	  [ -n "$$exe" ] && [ -n "$$msi" ] || { printf '%s\n' 'Tauri must produce both an NSIS EXE and an MSI.' >&2; exit 1; }; \
+	  cp "$$exe" "$$msi" "$$destination/"; \
 	  printf 'Collected Windows artifacts in %s\n' "$$destination"
