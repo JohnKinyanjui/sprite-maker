@@ -32,7 +32,7 @@ Before decomposition, require a movement description. If none is present, ask ho
 
 Apply the real-world physical envelope before timing the rig. Estimate scale, material/mass class, travel speed or angular velocity, acceleration, impact, damping, and cycle duration. Convert meters and seconds through the observed subject scale; explicit user values or clearly magical/cartoon motion override these estimates.
 
-Write the rig under `.sprite-studio/rigs/<slug>.json` and run:
+Write new articulated work as a backward-compatible `rigVersion: 2` rig under `.sprite-studio/rigs/<slug>.json`. Use semantic roles, named source-space anchors, parent/attachment relationships, exclusive pixel ownership, `baseZ`, and per-frame `zOverrides` where the object's occlusion changes. Default to `rootMotion: "in-place"`; use `"baked"` only for explicitly requested displacement. Then run:
 
 ```bash
 python3 .sprite-studio/sprite_rig.py --validate .sprite-studio/rigs/<slug>.json
@@ -47,7 +47,7 @@ Use the same JSON shape documented by the deterministic character rig harness. T
 - hinges, axles, sockets, and attachment points remain connected;
 - moving parts do not expose unexplained transparent holes;
 - the motion has believable anticipation, travel, impact, and settle poses when relevant;
-- hash every rendered PNG and reject accidental duplicate frames; a repeated hash is allowed only for an explicitly documented hold or loop closure;
+- hash every rendered PNG and reject accidental duplicate frames; a repeated hash is allowed only for an explicitly documented internal `hold: true`, and the final frame may not duplicate the first;
 - at very small resolutions, if different rotations quantize to identical pixels, increase the arc or add a purposeful integer-pixel translation while keeping the fixed base locked;
 - the loop returns cleanly to its first transform;
 - the AI proposes recovery or damped settle poses when the requested motion would otherwise stop abruptly, and the last frame leads into rather than duplicates the first frame;

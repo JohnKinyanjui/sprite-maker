@@ -1,24 +1,27 @@
 <script lang="ts">
   import { Check, Layers3 } from "lucide-svelte";
-  import { STYLE_PRESETS, type ConversationStyleId, type StylePresetId } from "$lib/style-presets";
+  import { assetUrl } from "$lib/api";
+  import { allStylePresets, type ConversationStyleId, type StylePresetId } from "$lib/style-presets";
+  import type { CustomArtStyle } from "$lib/library-types";
 
-  let { value, allowInherit = false, inheritedStyle = "pixel-rpg", compact = false, onChange }: {
-    value: ConversationStyleId; allowInherit?: boolean; inheritedStyle?: StylePresetId; compact?: boolean;
+  let { value, customStyles = [], allowInherit = false, inheritedStyle = "pixel-rpg", compact = false, onChange }: {
+    value: ConversationStyleId; customStyles?: CustomArtStyle[]; allowInherit?: boolean; inheritedStyle?: StylePresetId; compact?: boolean;
     onChange: (value: ConversationStyleId) => void | Promise<void>;
   } = $props();
+  const styles=$derived(allStylePresets(customStyles));
 </script>
 
 <div class="style-grid" class:compact>
   {#if allowInherit}
     <button class="preset inherit" class:selected={value === "inherit"} onclick={() => onChange("inherit")}>
       <span class="inherit-preview"><Layers3 size={20}/></span>
-      <span class="copy"><strong>Use workspace style</strong><small>Currently {STYLE_PRESETS.find(item => item.id === inheritedStyle)?.name}</small></span>
+      <span class="copy"><strong>Use project art</strong><small>Currently {styles.find(item => item.id === inheritedStyle)?.name}</small></span>
       {#if value === "inherit"}<span class="check"><Check size={12}/></span>{/if}
     </button>
   {/if}
-  {#each STYLE_PRESETS as preset}
+  {#each styles as preset}
     <button class="preset" class:selected={value === preset.id} onclick={() => onChange(preset.id)}>
-      <img src={preset.thumbnail} alt=""/>
+      {#if preset.thumbnail}<img src={preset.thumbnail.startsWith("/")?preset.thumbnail:assetUrl(preset.thumbnail)} alt=""/>{:else}<span class="inherit-preview"><Layers3 size={20}/></span>{/if}
       <span class="copy"><strong>{preset.name}</strong><small>{preset.description}</small></span>
       {#if value === preset.id}<span class="check"><Check size={12}/></span>{/if}
     </button>

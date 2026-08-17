@@ -13,6 +13,10 @@
   } = $props();
 
   const presets:{id:VfxEffectType;name:string;detail:string;frames:number;looping:boolean;blend:VfxBlendMode}[]=[
+    {id:"frost_lance",name:"Frost Lance",detail:"Traveling freeze front and shard impact",frames:14,looping:false,blend:"add"},
+    {id:"storm_lance",name:"Storm Lance",detail:"Forked filaments with a bright strike point",frames:12,looping:false,blend:"add"},
+    {id:"nova_beam",name:"Nova Beam",detail:"Charge, release, sustained core and collapse",frames:16,looping:false,blend:"screen"},
+    {id:"voltaic_snare",name:"Voltaic Snare",detail:"Zone boundary, lightning pillar and orbiting sparks",frames:16,looping:false,blend:"screen"},
     {id:"fire",name:"Ember Flame",detail:"Rising layered flame loop",frames:12,looping:true,blend:"add"},
     {id:"explosion",name:"Impact Burst",detail:"Expanding one-shot blast",frames:10,looping:false,blend:"add"},
     {id:"magic",name:"Arcane Pulse",detail:"Orbiting ring and spark loop",frames:12,looping:true,blend:"screen"},
@@ -34,8 +38,8 @@
   function choosePreset(id:VfxEffectType){const preset=presets.find(item=>item.id===id);if(!preset)return;effectType=preset.id;name=preset.name;frames=preset.frames;looping=preset.looping;blendMode=preset.blend;}
   async function generate(){
     generating=true;
-    const motion=looping?"a seamless loop whose last frame returns cleanly to the first":"a one-shot effect with a clear impact peak and complete dissipation";
-    const prompt=`/effect Create “${name}”, an original high-quality ${effectType} game VFX. Use ImageGen once for a polished transparent master, then derive ${frames} consistent ${width}x${height} frames at ${fps} FPS with deterministic motion. Make ${motion}. Design for ${blendMode} blending, keep a stable gameplay origin, crisp alpha edges, no text, no border, and no background. Treat variation seed ${seed} as an art-direction cue. Use any active reference images for palette, shape language, lighting, and material only.`;
+    const motion=looping?"a seamless loop whose last frame returns cleanly to the first":"a staged one-shot: anticipation, charge, release/travel, impact, and a readable aftermath";
+    const prompt=`/effect Create “${name}”, an original high-quality ${effectType} game VFX. Use ImageGen once for a polished transparent master, then derive ${frames} consistent ${width}x${height} frames at ${fps} FPS with deterministic motion. Make ${motion}. Use distinct core, halo, particles, and an optional ground-mark layer; reserve the brightest/widest silhouette for impact. Design for ${blendMode} blending, keep a stable gameplay origin, crisp alpha edges, no text, no border, and no background. Treat variation seed ${seed} as an art-direction cue. Use any active reference images for palette, shape language, lighting, and material only.`;
     try{await onGenerate(prompt);onNotice("ImageGen VFX generation started in chat");}catch(error){onError(errorMessage(error));}finally{generating=false;}
   }
   async function cancel(job:BackgroundJob){try{const updated=await api.cancelJob(job.id);jobs=jobs.map(item=>item.id===updated.id?updated:item);}catch(error){onError(errorMessage(error));}}

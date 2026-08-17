@@ -315,11 +315,19 @@ fn validate_vfx_input(input: &ProceduralVfxInput) -> CommandResult<()> {
     }
     if !matches!(
         input.effect_type.as_str(),
-        "fire" | "explosion" | "magic" | "slash" | "smoke"
+        "fire"
+            | "explosion"
+            | "magic"
+            | "slash"
+            | "smoke"
+            | "frost_lance"
+            | "storm_lance"
+            | "nova_beam"
+            | "voltaic_snare"
     ) {
         return Err(CommandError::new(
             "invalid_vfx_type",
-            "Choose Fire, Explosion, Magic, Slash, or Smoke",
+            "Choose a base effect or one of the experimental ability effects",
         ));
     }
     if !matches!(
@@ -416,6 +424,31 @@ fn draw_ring(
     }
 }
 
+/// A soft, layered sprite stroke. It lets the procedural experiments retain a
+/// readable direction of force at tiny game resolutions.
+fn draw_stroke(
+    image: &mut RgbaImage,
+    from_x: f64,
+    from_y: f64,
+    to_x: f64,
+    to_y: f64,
+    radius: f64,
+    color: Rgba<u8>,
+) {
+    let distance = (to_x - from_x).hypot(to_y - from_y);
+    let steps = distance.ceil().max(1.0) as u32;
+    for step in 0..=steps {
+        let u = step as f64 / steps as f64;
+        draw_disc(
+            image,
+            from_x + (to_x - from_x) * u,
+            from_y + (to_y - from_y) * u,
+            radius,
+            color,
+        );
+    }
+}
+
 fn pseudo(seed: u64, value: u64) -> f64 {
     let mut number = seed ^ value.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     number ^= number >> 30;
@@ -438,6 +471,243 @@ fn render_vfx_frame(input: &ProceduralVfxInput, frame_index: u32) -> RgbaImage {
     let center_x = width * 0.5;
     let center_y = height * 0.54;
     match input.effect_type.as_str() {
+        "frost_lance" => {
+            // A travelling freeze front: narrow at the caster, opening into an
+            // icy impact cluster. Each shard is a separate layer, not a flat
+            // blue explosion, which keeps the effect legible at sprite scale.
+            let travel = t.powf(0.68);
+            let front_x = width * (0.18 + travel * 0.62);
+            let ground_y = height * 0.70;
+            let glow = (std::f64::consts::PI * t).sin().max(0.0);
+            draw_stroke(
+                &mut image,
+                width * 0.14,
+                ground_y,
+                front_x,
+                ground_y,
+                1.1,
+                Rgba([97, 207, 255, (150.0 * glow) as u8]),
+            );
+            for shard in 0..9 {
+                let spread = (pseudo(input.seed, shard) - 0.5) * height * (0.10 + travel * 0.35);
+                let x = front_x + (pseudo(input.seed + 5, shard) - 0.35) * width * 0.15;
+                let y = ground_y + spread;
+                let size = width.min(height)
+                    * (0.025 + travel * 0.055)
+                    * (0.65 + pseudo(input.seed + 9, shard));
+                draw_disc(
+                    &mut image,
+                    x,
+                    y,
+                    size * 1.8,
+                    Rgba([75, 168, 255, (105.0 * glow) as u8]),
+                );
+                draw_disc(
+                    &mut image,
+                    x,
+                    y - size * 0.22,
+                    size * 0.8,
+                    Rgba([216, 250, 255, (235.0 * glow) as u8]),
+                );
+            }
+            draw_ring(
+                &mut image,
+                front_x,
+                ground_y,
+                width.min(height) * (0.04 + travel * 0.14),
+                1.2,
+                Rgba([196, 247, 255, (210.0 * (1.0 - t * 0.45)) as u8]),
+            );
+        }
+        "storm_lance" => {
+            // Three offset filaments make this read as electricity rather than
+            // as a generic beam. The target remains the brightest focal point.
+            let travel = t.powf(0.55);
+            let end_x = width * (0.16 + travel * 0.68);
+            let start_y = height * 0.58;
+            for strand in 0..3 {
+                let lane = (strand as f64 - 1.0) * 2.4;
+                let mut last_x = width * 0.14;
+                let mut last_y = start_y + lane;
+                for node in 1..10 {
+                    let u = node as f64 / 9.0;
+                    let x = width * 0.14 + (end_x - width * 0.14) * u;
+                    let jitter = (pseudo(input.seed + strand, node) - 0.5)
+                        * height
+                        * 0.14
+                        * (1.0 - u * 0.35);
+                    let y = start_y + lane + jitter;
+                    draw_stroke(
+                        &mut image,
+                        last_x,
+                        last_y,
+                        x,
+                        y,
+                        if strand == 1 { 1.45 } else { 0.8 },
+                        Rgba([157, 104, 255, (125.0 + 90.0 * travel) as u8]),
+                    );
+                    draw_stroke(
+                        &mut image,
+                        last_x,
+                        last_y,
+                        x,
+                        y,
+                        0.55,
+                        Rgba([235, 250, 255, (160.0 + 80.0 * travel) as u8]),
+                    );
+                    last_x = x;
+                    last_y = y;
+                }
+            }
+            let impact = width.min(height) * (0.035 + travel * 0.12);
+            draw_disc(
+                &mut image,
+                end_x,
+                start_y,
+                impact * 1.9,
+                Rgba([105, 71, 255, (125.0 * travel) as u8]),
+            );
+            draw_disc(
+                &mut image,
+                end_x,
+                start_y,
+                impact * 0.62,
+                Rgba([244, 253, 255, (245.0 * travel) as u8]),
+            );
+        }
+        "nova_beam" => {
+            // Charge, release, sustained column, then collapse. The three
+            // strokes are the sprite equivalent of core / shell / halo passes.
+            let charge = (t / 0.22).clamp(0.0, 1.0);
+            let release = ((t - 0.18) / 0.16).clamp(0.0, 1.0);
+            let fade = ((1.0 - t) / 0.20).clamp(0.0, 1.0);
+            let end_x = width * (0.22 + 0.62 * release);
+            let y = height * 0.56;
+            let orb = width.min(height) * (0.035 + charge * 0.11) * fade.max(0.45);
+            let charge_visibility = charge.max(0.08);
+            draw_disc(
+                &mut image,
+                width * 0.19,
+                y,
+                orb * 1.8,
+                Rgba([68, 210, 255, (95.0 * charge_visibility) as u8]),
+            );
+            draw_disc(
+                &mut image,
+                width * 0.19,
+                y,
+                orb * 0.72,
+                Rgba([255, 246, 178, (240.0 * charge_visibility) as u8]),
+            );
+            // Intake motes keep even the quiet charge frames visibly alive.
+            for mote in 0..4 {
+                let angle = std::f64::consts::TAU * (mote as f64 / 4.0 - t * 1.7);
+                draw_disc(
+                    &mut image,
+                    width * 0.19 + angle.cos() * orb * 1.65,
+                    y + angle.sin() * orb * 1.05,
+                    0.8,
+                    Rgba([255, 223, 117, (110.0 * charge_visibility) as u8]),
+                );
+            }
+            if release > 0.0 {
+                draw_stroke(
+                    &mut image,
+                    width * 0.19,
+                    y,
+                    end_x,
+                    y,
+                    orb * 1.15,
+                    Rgba([49, 192, 255, (90.0 * fade) as u8]),
+                );
+                draw_stroke(
+                    &mut image,
+                    width * 0.19,
+                    y,
+                    end_x,
+                    y,
+                    orb * 0.57,
+                    Rgba([104, 239, 255, (150.0 * fade) as u8]),
+                );
+                draw_stroke(
+                    &mut image,
+                    width * 0.19,
+                    y,
+                    end_x,
+                    y,
+                    orb * 0.20,
+                    Rgba([255, 252, 216, (250.0 * fade) as u8]),
+                );
+                for ring in 0..4 {
+                    draw_ring(
+                        &mut image,
+                        width * (0.22 + release * (0.14 + ring as f64 * 0.13)),
+                        y,
+                        orb * (0.6 + ring as f64 * 0.18),
+                        0.8,
+                        Rgba([255, 207, 89, (150.0 * fade) as u8]),
+                    );
+                }
+            }
+        }
+        "voltaic_snare" => {
+            // A measured zone: boundary first, an outward snap, then a charged
+            // central pillar and orbiting sparks.
+            let grow = (t / 0.26).clamp(0.0, 1.0);
+            let hold = (std::f64::consts::PI * t).sin().max(0.25);
+            let radius = width.min(height) * (0.12 + 0.24 * grow);
+            draw_disc(
+                &mut image,
+                center_x,
+                height * 0.62,
+                radius,
+                Rgba([92, 39, 194, (62.0 * hold) as u8]),
+            );
+            draw_ring(
+                &mut image,
+                center_x,
+                height * 0.62,
+                radius,
+                1.8,
+                Rgba([185, 86, 255, (235.0 * hold) as u8]),
+            );
+            draw_ring(
+                &mut image,
+                center_x,
+                height * 0.62,
+                radius * (1.14 - grow * 0.14),
+                0.8,
+                Rgba([231, 207, 255, (160.0 * (1.0 - grow * 0.5)) as u8]),
+            );
+            draw_stroke(
+                &mut image,
+                center_x,
+                height * 0.62,
+                center_x,
+                height * (0.62 - 0.32 * grow),
+                radius * 0.42,
+                Rgba([115, 50, 255, (120.0 * hold) as u8]),
+            );
+            draw_stroke(
+                &mut image,
+                center_x,
+                height * 0.62,
+                center_x,
+                height * (0.62 - 0.32 * grow),
+                radius * 0.15,
+                Rgba([241, 228, 255, (210.0 * hold) as u8]),
+            );
+            for spark in 0..7 {
+                let angle = std::f64::consts::TAU * (spark as f64 / 7.0 + t * 1.4);
+                draw_disc(
+                    &mut image,
+                    center_x + angle.cos() * radius,
+                    height * 0.62 + angle.sin() * radius * 0.48,
+                    1.2,
+                    Rgba([247, 236, 255, (220.0 * hold) as u8]),
+                );
+            }
+        }
         "explosion" => {
             let envelope = (std::f64::consts::PI * t).sin().max(0.0);
             let radius = width.min(height) * (0.08 + 0.34 * t);
@@ -1540,32 +1810,44 @@ mod tests {
 
     #[test]
     fn procedural_vfx_frames_are_distinct_and_transparent() {
-        let input = ProceduralVfxInput {
-            project_id: "project".into(),
-            worktree_id: "vfx".into(),
-            name: "Arcane Pulse".into(),
-            effect_type: "magic".into(),
-            blend_mode: "screen".into(),
-            width: 64,
-            height: 64,
-            frames: 12,
-            fps: 12,
-            looping: true,
-            seed: 42,
-        };
-        let frames: Vec<_> = (0..input.frames)
-            .map(|index| render_vfx_frame(&input, index))
-            .collect();
-        let hashes: std::collections::HashSet<_> = frames
-            .iter()
-            .map(|frame| blake3::hash(frame.as_raw()))
-            .collect();
-        assert_eq!(hashes.len(), frames.len());
-        assert!(frames
-            .iter()
-            .all(|frame| frame.pixels().any(|pixel| pixel[3] == 0)));
-        assert!(frames
-            .iter()
-            .all(|frame| frame.pixels().any(|pixel| pixel[3] > 0)));
+        for effect_type in [
+            "magic",
+            "frost_lance",
+            "storm_lance",
+            "nova_beam",
+            "voltaic_snare",
+        ] {
+            let input = ProceduralVfxInput {
+                project_id: "project".into(),
+                worktree_id: "vfx".into(),
+                name: "Effect test".into(),
+                effect_type: effect_type.into(),
+                blend_mode: "screen".into(),
+                width: 64,
+                height: 64,
+                frames: 12,
+                fps: 12,
+                looping: effect_type == "magic",
+                seed: 42,
+            };
+            let frames: Vec<_> = (0..input.frames)
+                .map(|index| render_vfx_frame(&input, index))
+                .collect();
+            let hashes: std::collections::HashSet<_> = frames
+                .iter()
+                .map(|frame| blake3::hash(frame.as_raw()))
+                .collect();
+            assert_eq!(
+                hashes.len(),
+                frames.len(),
+                "{effect_type} frames should animate"
+            );
+            assert!(frames
+                .iter()
+                .all(|frame| frame.pixels().any(|pixel| pixel[3] == 0)));
+            assert!(frames
+                .iter()
+                .all(|frame| frame.pixels().any(|pixel| pixel[3] > 0)));
+        }
     }
 }

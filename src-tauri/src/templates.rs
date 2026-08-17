@@ -154,8 +154,8 @@ pub fn create_animation_template(
             "Template frame mode must be Fixed or Auto",
         ));
     }
-    let minimum = min_frames.clamp(1, 32);
-    let maximum = max_frames.clamp(minimum, 32);
+    let minimum = min_frames.clamp(1, 64);
+    let maximum = max_frames.clamp(minimum, 64);
     let (project_id, animation_name, fps, looping, frames_json): (
         String,
         String,
@@ -187,7 +187,7 @@ pub fn create_animation_template(
         ));
     }
     let first_asset = get_asset(&state, &frames[0].asset_id)?;
-    let source_frame_count = frames.len().clamp(1, 32) as u32;
+    let source_frame_count = frames.len().clamp(1, 64) as u32;
     let preferred_frames = if frame_mode == "auto" {
         source_frame_count.clamp(minimum, maximum)
     } else {

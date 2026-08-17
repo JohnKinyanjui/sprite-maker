@@ -27,7 +27,7 @@ fn explicit_frame_count(prompt: &str) -> Option<u32> {
     })
 }
 
-fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bool) {
+fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bool, bool) {
     let lower = prompt.to_ascii_lowercase();
     if ["death", "dying", "collapse", "defeat"]
         .iter()
@@ -55,6 +55,7 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
                 phase("Rest", "Hold the final readable state", 1.3),
             ],
             false,
+            false,
         );
     }
     if ["dodge", "roll", "evade", "sidestep"]
@@ -65,18 +66,39 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
             "a fast evasive action",
             6,
             vec![
-                phase("Ready", "Establish the grounded starting pose", 0.8),
                 phase(
-                    "Anticipation",
-                    "Compress opposite the escape direction",
+                    "Ready",
+                    "NEAR and FAR legs grounded shoulder width; establish the starting pose",
                     0.8,
                 ),
-                phase("Launch", "Commit the center of mass to the dodge", 0.6),
-                phase("Travel", "Show the clearest evasive silhouette", 0.6),
-                phase("Landing", "Reconnect the feet or body to the ground", 0.8),
-                phase("Recovery", "Return to a controllable pose", 1.0),
+                phase(
+                    "Anticipation",
+                    "Compress opposite the escape direction; NEAR leg loads",
+                    0.8,
+                ),
+                phase(
+                    "Launch",
+                    "NEAR leg pushes the center of mass into the dodge while the FAR leg trails",
+                    0.6,
+                ),
+                phase(
+                    "Travel",
+                    "Show the clearest evasive silhouette; FAR leg tucks behind the NEAR leg",
+                    0.6,
+                ),
+                phase(
+                    "Landing",
+                    "FAR leg reconnects to the ground first and absorbs the landing",
+                    0.8,
+                ),
+                phase(
+                    "Recovery",
+                    "Both legs regrounded under the body in a controllable pose",
+                    1.0,
+                ),
             ],
             false,
+            true,
         );
     }
     if contains_word(&lower, "cast")
@@ -97,6 +119,7 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
                 phase("Recovery", "Settle character and effect remnants", 1.0),
                 phase("Return", "Reach the final stable pose", 0.9),
             ],
+            false,
             false,
         );
     }
@@ -120,6 +143,7 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
                 phase("Return", "Reconnect cleanly to the start", 0.8),
             ],
             false,
+            false,
         );
     }
     if ["walk", "walking"]
@@ -130,15 +154,48 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
             "a looping walk cycle",
             8,
             vec![
-                phase("Left contact", "Left foot contacts ahead", 1.0),
-                phase("Left down", "Weight compresses over the left foot", 0.9),
-                phase("Left passing", "Rear leg passes the planted leg", 0.8),
-                phase("Left up", "Body rises before the next contact", 0.9),
-                phase("Right contact", "Right foot contacts ahead", 1.0),
-                phase("Right down", "Weight compresses over the right foot", 0.9),
-                phase("Right passing", "Rear leg passes the planted leg", 0.8),
-                phase("Right up", "Body rises and returns to the loop", 0.9),
+                phase(
+                    "Near contact",
+                    "NEAR leg plants ahead under the hip at heel strike; FAR leg trails behind on the toe",
+                    1.0,
+                ),
+                phase(
+                    "Near down",
+                    "Weight compresses over the NEAR planted foot; FAR heel lifts",
+                    0.9,
+                ),
+                phase(
+                    "Near passing",
+                    "FAR leg swings through beside the NEAR planted leg; the NEAR leg occludes at overlap",
+                    0.8,
+                ),
+                phase(
+                    "Near up",
+                    "Body rises over the NEAR toe; FAR leg reaches ahead for its contact",
+                    0.9,
+                ),
+                phase(
+                    "Far contact",
+                    "FAR leg plants ahead under the hip; NEAR leg trails behind on the toe",
+                    1.0,
+                ),
+                phase(
+                    "Far down",
+                    "Weight compresses over the FAR planted foot; NEAR heel lifts",
+                    0.9,
+                ),
+                phase(
+                    "Far passing",
+                    "NEAR leg swings through beside the FAR planted leg; the FAR leg occludes at overlap",
+                    0.8,
+                ),
+                phase(
+                    "Far up",
+                    "Body rises over the FAR toe; NEAR leg reaches ahead to close the loop",
+                    0.9,
+                ),
             ],
+            true,
             true,
         );
     }
@@ -150,15 +207,48 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
             "a looping run cycle",
             8,
             vec![
-                phase("Left contact", "Left foot reaches into contact", 0.8),
-                phase("Compression", "Body absorbs weight and lowers", 0.8),
-                phase("Drive", "Rear leg drives the body forward", 0.7),
-                phase("Flight", "Both feet leave the ground", 0.7),
-                phase("Right contact", "Right foot reaches into contact", 0.8),
-                phase("Compression", "Body absorbs the opposite step", 0.8),
-                phase("Drive", "Opposite rear leg drives forward", 0.7),
-                phase("Flight", "Airborne pose returns to the loop", 0.7),
+                phase(
+                    "Near contact",
+                    "NEAR leg reaches into contact under the hips; FAR leg trails behind with a bent knee",
+                    0.8,
+                ),
+                phase(
+                    "Near compression",
+                    "NEAR stance leg absorbs and lowers the body; FAR leg folds and swings forward",
+                    0.8,
+                ),
+                phase(
+                    "Near drive",
+                    "NEAR toe drives the body forward while the FAR knee drives through",
+                    0.7,
+                ),
+                phase(
+                    "Flight",
+                    "Both feet airborne; FAR leg now reaching ahead while the NEAR leg trails",
+                    0.7,
+                ),
+                phase(
+                    "Far contact",
+                    "FAR leg reaches into contact under the hips; NEAR leg trails behind with a bent knee",
+                    0.8,
+                ),
+                phase(
+                    "Far compression",
+                    "FAR stance leg absorbs and lowers the body; NEAR leg folds and swings forward",
+                    0.8,
+                ),
+                phase(
+                    "Far drive",
+                    "FAR toe drives the body forward while the NEAR knee drives through",
+                    0.7,
+                ),
+                phase(
+                    "Flight return",
+                    "Both feet airborne again; NEAR leg reaches ahead to close the loop",
+                    0.7,
+                ),
             ],
+            true,
             true,
         );
     }
@@ -177,6 +267,7 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
                 phase("Settle", "Reconnect to the opening pose", 1.2),
             ],
             true,
+            false,
         );
     }
     if ["open", "opening", "close", "closing", "unfold"]
@@ -205,6 +296,7 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
                 phase("Settle", "Return cleanly to the closed loop pose", 1.0),
             ],
             true,
+            false,
         );
     }
     if ["attack", "slash", "strike", "swing", "shoot"]
@@ -216,14 +308,27 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
             7,
             vec![
                 phase("Start", "Establish the neutral combat silhouette", 0.8),
-                phase("Anticipation", "Make the direction of force readable", 1.0),
-                phase("Wind-up", "Load the body or weapon", 1.0),
-                phase("Acceleration", "Move rapidly toward contact", 0.7),
-                phase("Impact", "Show the decisive contact pose", 0.9),
+                phase(
+                    "Anticipation",
+                    "Make the direction of force readable; weight shifts onto the FAR leg",
+                    1.0,
+                ),
+                phase("Wind-up", "Load the body or weapon over the grounded FAR leg", 1.0),
+                phase(
+                    "Acceleration",
+                    "Move rapidly toward contact; NEAR leg starts its step",
+                    0.7,
+                ),
+                phase(
+                    "Impact",
+                    "Decisive contact pose; NEAR foot planted, FAR heel lifted",
+                    0.9,
+                ),
                 phase("Follow-through", "Carry momentum past impact", 0.9),
                 phase("Recovery", "Return to a stable pose", 1.1),
             ],
             false,
+            true,
         );
     }
     if ["explosion", "burst", "spark", "smoke", "effect", "vfx"]
@@ -252,6 +357,7 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
                 ),
             ],
             false,
+            false,
         );
     }
     (
@@ -266,6 +372,7 @@ fn classify_motion(prompt: &str) -> (&'static str, u32, Vec<PhaseDefinition>, bo
             phase("Settle", "Reach the final or looping pose", 1.0),
         ],
         lower.contains("loop"),
+        false,
     )
 }
 
@@ -329,10 +436,11 @@ pub fn build_motion_plan(
             "Frame mode must be Fixed or Auto",
         ));
     }
-    let minimum = generation.min_frames.clamp(1, 32);
-    let maximum = generation.max_frames.clamp(minimum, 32);
-    let (motion_kind, recommended, definitions, inferred_loop) = classify_motion(prompt);
-    let explicit = explicit_frame_count(prompt).filter(|count| (1..=32).contains(count));
+    let minimum = generation.min_frames.clamp(1, 64);
+    let maximum = generation.max_frames.clamp(minimum, 64);
+    let (motion_kind, recommended, definitions, inferred_loop, limb_identity) =
+        classify_motion(prompt);
+    let explicit = explicit_frame_count(prompt).filter(|count| (1..=64).contains(count));
     let single_frame = prompt.trim_start().starts_with("/sprite")
         || prompt.to_ascii_lowercase().contains("single frame")
         || prompt.to_ascii_lowercase().contains("one frame");
@@ -341,7 +449,7 @@ pub fn build_motion_plan(
     } else if let Some(explicit) = explicit {
         explicit
     } else if generation.frame_mode == "fixed" {
-        generation.frames.clamp(1, 32)
+        generation.frames.clamp(1, 64)
     } else {
         recommended.clamp(minimum, maximum)
     };
@@ -365,6 +473,13 @@ pub fn build_motion_plan(
         format!(
             "{selected} frames selected within the {minimum}–{maximum} limit because the request describes {motion_kind}."
         )
+    };
+    let explanation = if limb_identity {
+        format!(
+            "{explanation} Paired limbs are named by camera depth (NEAR limb and FAR limb), never by screen side; the FAR limb keeps a darker shade so the legs never swap identity."
+        )
+    } else {
+        explanation
     };
     Ok(MotionPlan {
         frame_mode: effective_mode.into(),
@@ -478,6 +593,49 @@ mod tests {
                 "{prompt}"
             );
         }
+    }
+
+    #[test]
+    fn locomotion_phases_name_limbs_by_camera_depth_not_screen_side() {
+        for prompt in ["run cycle", "walk cycle"] {
+            let plan = build_motion_plan(prompt, &options("auto", 6, 4, 16))
+                .unwrap_or_else(|error| panic!("{prompt} should plan: {}", error.message));
+            let text = plan
+                .phases
+                .iter()
+                .map(|phase| format!("{} {}", phase.name, phase.description))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                text.contains("NEAR leg") && text.contains("FAR leg"),
+                "{prompt} phases must name NEAR and FAR legs: {text}"
+            );
+            assert!(
+                !text.to_lowercase().contains("left foot") && !text.to_lowercase().contains("right foot"),
+                "{prompt} phases must not use screen-side leg names: {text}"
+            );
+            assert!(plan.explanation.contains("NEAR limb and FAR limb"));
+        }
+        // Non-locomotion motions keep their phase vocabulary untouched.
+        let effect = build_motion_plan("explosion vfx loop", &options("auto", 6, 4, 16))
+            .expect("effect plan should build");
+        assert!(!effect.explanation.contains("NEAR limb"));
+    }
+
+    #[test]
+    fn run_cycle_alternates_leg_contacts_and_keeps_flight_symmetric() {
+        let plan = build_motion_plan("run cycle", &options("auto", 6, 4, 16))
+            .expect("run plan should build");
+        let names: Vec<&str> = plan.phases.iter().map(|phase| phase.name.as_str()).collect();
+        let near_contacts = names.iter().filter(|name| **name == "Near contact").count();
+        let far_contacts = names.iter().filter(|name| **name == "Far contact").count();
+        assert_eq!(near_contacts, 1, "one NEAR contact per cycle: {names:?}");
+        assert_eq!(far_contacts, 1, "one FAR contact per cycle: {names:?}");
+        let flights = names
+            .iter()
+            .filter(|name| name.starts_with("Flight"))
+            .count();
+        assert_eq!(flights, 2, "a run cycle has two flight phases: {names:?}");
     }
 
     #[test]

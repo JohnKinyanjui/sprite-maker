@@ -49,12 +49,30 @@ After that inspection, write a structured proposal before rendering:
 - name every movable part and the pixels it owns;
 - choose a tight rect or polygon mask for each part;
 - place the pivot on the physical joint, hinge, axle, or attachment point;
-- assign explicit z order and identify any intentional overlap;
+- assign an anatomical `role`, explicit z order, and any parent/attachment relationship;
 - define the stable base pixels that must never move;
 - prove that `stableBase` excludes every limb, segment, wing, hinge, or other part required by the motion intent;
-- write a frame table describing elapsed seconds, support/contact, physically scaled root position, and each part transform;
+- write a frame table describing elapsed seconds, gait `phase`, planted `contacts`, physically scaled root position, and each part transform;
+- make the action visibly readable at 1× playback. For locomotion, at least two anatomical parts must span a perceptible pose range across the cycle: 8° rotation, 1.5 logical pixels of translation, or 5% scale. Values such as ±2° or 0.999–1.001 scale are numerical motion but visually static after pixel quantization and must be rejected;
+- animate the core body as part of the mechanics, not as a rigid platform above moving limbs. Bipeds need pelvis/torso compression and counter-rotation; quadrupeds need pelvis, shoulder, and spine flexion; segmented creatures need a travelling wave through at least two body segments; winged actors need chest/torso reaction to the wing stroke. Root bobbing does not satisfy body articulation;
 - include an explicit final-to-first row in the frame table describing the closure transition and any contact exchange;
 - keep `source` fixed to the one approved master.
+
+## Rig version 3
+
+Author new articulated rigs with `"rigVersion": 3` and the anatomy-specific profile from the embedded Sprite Rig Profiles contract. Versions 1 and 2 remain readable for existing assets, but new locomotion must use version 3. A version 3 rig records observed joints and named poses before it defines deformation.
+
+- Set top-level `rootMotion` to `"in-place"` for a game-ready gait or `"baked"` only when the user explicitly requests displacement. In-place root transforms must be circular; baked travel must agree with the physical envelope.
+- Set top-level `baseZ`; the base and all parts share one depth order. A frame may use `zOverrides` only when crossing limbs or another real occlusion changes front/back order.
+- Give every articulated part a semantic `role`. Define named bind-pose `anchors` as source-space `[x,y]` points. A child names its `parent` and uses `attach: {"parentAnchor":"...","selfAnchor":"..."}`; resolve transforms parent-first, with child transforms local to the inherited parent pose.
+- Set `rigProfile` to the morphology-specific skeleton. Record every required observed joint in `joints`, including its source position, visibility, and two adjoining parts. Give each part a `bone` capsule. Visible gameplay-side joints must be supported by actual source pixels from both adjoining parts, and no opaque base pixel may remain inside a bone capsule.
+- Every visible source pixel belongs to the base or exactly one movable part. Do not leave a moving part in the base. Overlap is rejected unless the part declares `overlapMode: "joint-cap"` for a small intentional seam repair; this mode must not duplicate a whole limb or body region.
+- Every locomotion frame declares `phase` and only its planted contacts as `contacts: [{"part":"...","anchor":"...","state":"planted"}]`; omit lifted feet. Use `hold: true` only for an intentional readable hold, never to excuse accidental duplicate poses.
+- Every locomotion frame also declares a named `pose`. Establish contact/extreme key poses first, then breakdowns and in-betweens. A four-leg run uses hind contact, extended flight, fore contact, and gathered flight; a walk uses contact, down, passing, and up on complementary sides.
+- Prefer per-frame two-bone `ik` constraints for limbs that must reach planted or swing targets. A chain contains directly parented upper/lower parts and may include a foot/hand child; declare its endpoint anchor, locked-canvas target, bend direction, and optional end-effector world rotation. Use direct local transforms for secondary motion, not for manual stance-foot compensation.
+- Do not animate a flexible limb, spine, neck, or tail as one rigid cutout. Prefer a real upper/lower/end chain. When the source silhouette cannot be split cleanly, add a pixel-preserving weighted `mesh` to the owning part: bind-pose `vertices`, indexed `triangles`, and one 1–4-entry weight list per vertex using `{ "bone": "part_name", "weight": 0..1 }`. Weights must sum to one. Add internal vertex rows at knees, shoulders, hips, and other bend zones; broad two-triangle rectangles are not sufficient for a hero rig. Mesh sampling remains nearest-neighbour so palette colors stay exact.
+
+Version 3 validation must reject a mismatched profile, missing or unsupported visible joints, missing named key poses, residual pixels left inside bone envelopes, morphology-incompatible roles, unknown targets, missing/cyclic parents, missing attachment/contact anchors, separated attachment anchors, moving planted anchors, conflicting pixel ownership, uncovered or invalid weighted meshes, rigid one-piece quadruped limbs, imperceptible transform ranges, unexplained duplicate frame hashes, clipped visible pixels, and a final-to-first root, joint, contact, silhouette, or depth discontinuity larger than an ordinary adjacent transition. The final frame must not duplicate the first, even when another frame is an intentional hold.
 
 Save that proposal as the rig JSON under `.sprite-studio/rigs/`. Then validate it without producing frames:
 
@@ -62,7 +80,7 @@ Save that proposal as the rig JSON under `.sprite-studio/rigs/`. Then validate i
 python3 .sprite-studio/sprite_rig.py --validate .sprite-studio/rigs/<slug>.json
 ```
 
-Treat validation warnings about overlapping masks as review work. Tighten masks or mark `allowOverlap: true` only for intentional joint coverage. Validation errors must be fixed before rendering.
+Treat version 1 validation warnings about overlapping masks as review work. Tighten masks or mark `allowOverlap: true` only for intentional joint coverage. Version 2 uses exclusive ownership and the bounded `overlapMode: "joint-cap"` exception above. Validation errors must be fixed before rendering.
 
 ## Stage 2 — deterministic render
 
@@ -80,6 +98,6 @@ The AI may revise the proposal—masks, pivots, z order, transforms, and tiny jo
 
 Do not hand validation failures back to the user as unfinished work. When validation reports an error or overlap warning, inspect the named part and automatically revise only the rig proposal. Tighten masks, move pivots onto physical joints, correct z order, or adjust transforms, then validate again.
 
-After rendering, inspect the contact sheet and cyclic playback for disconnected joints, holes, duplicate hashes, ground-line drift, unreadable motion, and loop pops. Evaluate the last-to-first transition with the same scrutiny as every in-sequence transition. If closure fails, have the AI revise recovery/settle poses, transforms, or the Auto frame recommendation, then rerender the same rig. Use at most three repair passes per request. Preserve the approved master hash throughout every pass. In explicit AI Polish or Full redraw mode, the one automatic motion-ready revision above is already authorized; only ask the user if another master revision would be required after that attempt.
+After rendering, inspect the contact sheet and cyclic playback for disconnected joints, holes, duplicate hashes, sliding planted anchors, ground-line drift, clipping, unreadable motion, wrong limb depth, and loop pops. Evaluate the last-to-first transition with the same scrutiny as every in-sequence transition. For winged actors, reject any frame where a visible wing root loses believable shoulder/chest overlap, where the whole wing orbits like a detached rigid card, or where near/far wings swap depth. If the first candidate fails, revise recovery/settle poses, masks, pivots, weights, transforms, contacts, depth overrides, or the Auto frame recommendation, then rerender exactly once. Preserve the approved master hash unless the internally generated master itself failed motion readiness. Do not reveal the rejected attempt or retry transcript to the user. If the replacement also fails, return a terminal failure and publish neither attempt.
 
-Report completion only after validation passes and the deterministic rerender is reproducible. Briefly summarize any automatic repairs that were applied.
+Report completion only after validation passes and the deterministic rerender is reproducible. Keep the internal acceptance pass and any successful retry out of user-facing text.

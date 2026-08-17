@@ -13,6 +13,7 @@ use crate::{
 use chrono::Utc;
 use image::{imageops::FilterType, RgbaImage};
 use rusqlite::{params, OptionalExtension};
+use std::path::Path;
 use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
 
@@ -395,6 +396,194 @@ fn score_with_penalty(penalty: f64) -> f64 {
     (100.0 - penalty).clamp(0.0, 100.0)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LimbBlob {
+    min_x: u32,
+    max_x: u32,
+    pixels: u32,
+    luminance: f64,
+}
+
+/// Classification of a frame's lower body: two separated legs, an occupied
+/// band whose legs cannot be told apart (fused or shredded), or no lower
+/// body at all.
+#[derive(Debug, PartialEq)]
+enum LowerBodyView {
+    TwoBlobs(Vec<LimbBlob>),
+    Indistinct,
+    Empty,
+}
+
+/// Segments the lower body band into leg blobs, left to right. A single
+/// column run means the legs fused (or a trailing scarf connected them);
+/// three or more runs are equally unmeasurable. Both become `Indistinct`.
+fn lower_body_view(image: &RgbaImage, bounds: Option<(u32, u32, u32, u32)>) -> LowerBodyView {
+    let Some((min_x, min_y, max_x, max_y)) = bounds else {
+        return LowerBodyView::Empty;
+    };
+    if max_x < min_x || max_y <= min_y + 2 {
+        return LowerBodyView::Empty;
+    }
+    let band_start = min_y + ((max_y - min_y) as f64 * 0.66) as u32;
+    if band_start >= max_y {
+        return LowerBodyView::Empty;
+    }
+    let width = (max_x - min_x + 1) as usize;
+    let mut occupied = vec![false; width];
+    let mut occupied_columns = 0_usize;
+    for y in band_start..=max_y {
+        for x in min_x..=max_x {
+            if image.get_pixel(x, y)[3] > 8 {
+                let index = (x - min_x) as usize;
+                if !occupied[index] {
+                    occupied[index] = true;
+                    occupied_columns += 1;
+                }
+            }
+        }
+    }
+    if occupied_columns == 0 {
+        return LowerBodyView::Empty;
+    }
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut start: Option<usize> = None;
+    for index in 0..width {
+        if occupied[index] && start.is_none() {
+            start = Some(index);
+        }
+        if start.is_some() && (!occupied[index] || index + 1 == width) {
+            let begin = start.take().expect("run start");
+            let end = if occupied[index] { index } else { index - 1 };
+            runs.push((begin, end));
+        }
+    }
+    let runs: Vec<_> = runs
+        .into_iter()
+        .filter(|(begin, end)| end - begin + 1 >= 2)
+        .collect();
+    if runs.len() != 2 {
+        return LowerBodyView::Indistinct;
+    }
+    let mut blobs = Vec::with_capacity(2);
+    for (begin, end) in runs {
+        let mut weight = 0.0;
+        let mut luminance = 0.0;
+        let mut pixels = 0_u32;
+        for y in band_start..=max_y {
+            for x in (min_x + begin as u32)..=(min_x + end as u32) {
+                let pixel = image.get_pixel(x, y);
+                let alpha = pixel[3];
+                if alpha > 8 {
+                    let alpha_weight = alpha as f64 / 255.0;
+                    let value = 0.299 * pixel[0] as f64
+                        + 0.587 * pixel[1] as f64
+                        + 0.114 * pixel[2] as f64;
+                    weight += alpha_weight;
+                    luminance += value * alpha_weight;
+                    pixels += 1;
+                }
+            }
+        }
+        if pixels < 8 || weight <= 0.0 {
+            return LowerBodyView::Indistinct;
+        }
+        blobs.push(LimbBlob {
+            min_x: min_x + begin as u32,
+            max_x: min_x + end as u32,
+            pixels,
+            luminance: luminance / weight,
+        });
+    }
+    LowerBodyView::TwoBlobs(blobs)
+}
+
+/// Detects a broken far-limb shading lock. In a correct paired-limb cycle the
+/// far leg stays visibly darker than the near leg in every frame where both
+/// legs are separate; frames that drop the distinction read as a limb swap.
+fn limb_shading_checks(analyzed: &[AnalyzedFrame]) -> Vec<PendingCheck> {
+    let gaps: Vec<Option<(usize, f64)>> = analyzed
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| match lower_body_view(&frame.image, frame.metrics.bounds) {
+            LowerBodyView::TwoBlobs(blobs) => {
+                Some((index, (blobs[0].luminance - blobs[1].luminance).abs()))
+            }
+            _ => None,
+        })
+        .collect();
+    let measurable: Vec<(usize, f64)> = gaps.into_iter().flatten().collect();
+    if measurable.len() < 3 {
+        return Vec::new();
+    }
+    // 8/255 is the smallest gap that still reads as two shades at 1× scale;
+    // measured real cycles sit near 9 (subtle palettes) to 100 (high contrast).
+    let strong = measurable
+        .iter()
+        .filter(|(_, gap)| *gap >= 8.0)
+        .count();
+    if strong < 2 || (strong as f64 / measurable.len() as f64) < 0.6 {
+        return Vec::new();
+    }
+    measurable
+        .iter()
+        .filter(|(_, gap)| *gap < 4.0)
+        .map(|(index, gap)| PendingCheck {
+            check_type: "limb_identity",
+            frame_index: Some(*index as u32),
+            comparison_frame_index: None,
+            severity: "warning",
+            score: score_with_penalty(24.0),
+            message: format!(
+                "Frame {} lost the far-limb shading lock: both legs read as the same limb (shading gap {:.1}/255). Regenerate it with the far leg visibly darker.",
+                index + 1,
+                gap
+            ),
+            metric_value: Some(*gap),
+            metric_unit: Some("luminance gap"),
+            repair_action: Some("regenerate"),
+        })
+        .collect()
+}
+
+/// Detects a hop masquerading as a run: a paired-limb cycle needs visible leg
+/// alternation, so frames where the legs fuse into one silhouette should be
+/// the minority (passing or gathered poses). When at least one frame proves
+/// the character's legs do separate, an indistinct majority means the cycle
+/// collapsed into synchronized legs and must be regenerated.
+fn leg_alternation_checks(analyzed: &[AnalyzedFrame]) -> Vec<PendingCheck> {
+    let mut separated = 0_usize;
+    let mut indistinct = 0_usize;
+    for frame in analyzed {
+        match lower_body_view(&frame.image, frame.metrics.bounds) {
+            LowerBodyView::TwoBlobs(_) => separated += 1,
+            LowerBodyView::Indistinct => indistinct += 1,
+            LowerBodyView::Empty => {}
+        }
+    }
+    let total = separated + indistinct;
+    if total < 5 || separated == 0 {
+        return Vec::new();
+    }
+    let ratio = indistinct as f64 / total as f64;
+    if ratio <= 0.6 {
+        return Vec::new();
+    }
+    let severe = ratio > 0.75;
+    vec![PendingCheck {
+        check_type: "leg_separation",
+        frame_index: None,
+        comparison_frame_index: None,
+        severity: if severe { "error" } else { "warning" },
+        score: score_with_penalty(if severe { 35.0 } else { 18.0 }),
+        message: format!(
+            "The legs read as one silhouette in {indistinct} of {total} frames, so the cycle lost leg alternation and plays as a hop. Regenerate it with two wide split stances half a cycle apart (NEAR contact, then FAR contact) and keep the far leg visible as the darker shape behind the near leg in every gathered pose. If AI frames keep failing here, rig the sprite in the Rig tab and render deterministically."
+        ),
+        metric_value: Some(ratio * 100.0),
+        metric_unit: Some("% frames with fused legs"),
+        repair_action: Some("regenerate"),
+    }]
+}
+
 fn run_analysis(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -675,6 +864,19 @@ fn run_analysis(
                 result_path: None,
             },
         )?;
+    }
+    let limb_checks = limb_shading_checks(&analyzed);
+    if !limb_checks.is_empty() {
+        consistency_penalty += (limb_checks.len() as f64 * 6.0).min(18.0);
+        checks.extend(limb_checks);
+    }
+    for check in leg_alternation_checks(&analyzed) {
+        consistency_penalty += if check.severity == "error" {
+            20.0
+        } else {
+            8.0
+        };
+        checks.push(check);
     }
     let loop_quality_score = if looping && analyzed.len() > 1 {
         let difference = pixel_difference(&analyzed[analyzed.len() - 1].image, &analyzed[0].image);
@@ -1096,24 +1298,94 @@ fn interpolate_rgba(first: &RgbaImage, second: &RgbaImage) -> CommandResult<Rgba
     Ok(output)
 }
 
+fn interpolation_neighbors(
+    index: usize,
+    frame_count: usize,
+    looping: bool,
+) -> Option<(usize, usize)> {
+    if frame_count < 3 || index >= frame_count {
+        return None;
+    }
+    if index == 0 {
+        return looping.then_some((frame_count - 1, 1));
+    }
+    if index + 1 == frame_count {
+        return looping.then_some((frame_count - 2, 0));
+    }
+    Some((index - 1, index + 1))
+}
+
+fn create_interpolated_repair(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    source: &Animation,
+    first_index: usize,
+    second_index: usize,
+    output_directory: &Path,
+    file_name: &str,
+    duration_ms: u32,
+) -> CommandResult<AnimationFrame> {
+    let first_frame = source.frames.get(first_index).ok_or_else(|| {
+        CommandError::new(
+            "repair_frame_missing",
+            "The first repair frame no longer exists",
+        )
+    })?;
+    let second_frame = source.frames.get(second_index).ok_or_else(|| {
+        CommandError::new(
+            "repair_frame_missing",
+            "The second repair frame no longer exists",
+        )
+    })?;
+    let first_asset = get_asset(state, &first_frame.asset_id)?;
+    let second_asset = get_asset(state, &second_frame.asset_id)?;
+    let first = image::open(&first_asset.path)?.to_rgba8();
+    let second = image::open(&second_asset.path)?.to_rgba8();
+    let transition = interpolate_rgba(&first, &second)?;
+    let root = workspace_path(state, &source.workspace_id)?;
+    std::fs::create_dir_all(output_directory)?;
+    app.asset_protocol_scope()
+        .allow_directory(output_directory, true)
+        .map_err(|error| CommandError::new("asset_scope_error", error.to_string()))?;
+    let path = output_directory.join(file_name);
+    transition.save(&path)?;
+    let asset = inspect(&source.workspace_id, &root, &path, None)?;
+    upsert(state, &asset, "quality_frame_repair")?;
+    if let Some(worktree_id) = &source.worktree_id {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+        connection.execute(
+            "INSERT OR REPLACE INTO asset_worktrees(asset_id,worktree_id,relationship,created_at) VALUES (?1,?2,'owned',?3)",
+            params![asset.id, worktree_id, Utc::now().to_rfc3339()],
+        )?;
+    }
+    Ok(AnimationFrame {
+        asset_id: asset.id,
+        duration_ms: Some(duration_ms),
+    })
+}
+
 fn optimize_animation_frames_inner(
     app: &tauri::AppHandle,
     state: &AppState,
     input: FrameOptimizationInput,
 ) -> CommandResult<FrameOptimizationResult> {
     let source = load_animation_by_id(state, &input.animation_id)?;
-    let plan = source.motion_plan.clone().ok_or_else(|| {
-        CommandError::new(
-            "missing_motion_plan",
-            "Only animations with a stored frame policy can be optimized automatically",
-        )
-    })?;
-    if plan.frame_mode != "auto" || !plan.allow_auto_adjust {
-        return Err(CommandError::new(
-            "fixed_frame_policy",
-            "This animation uses a fixed frame count. Repair frames without changing its frame budget",
-        ));
-    }
+    let plan = source.motion_plan.clone().unwrap_or_else(|| MotionPlan {
+        frame_mode: "fixed".into(),
+        selected_frame_count: source.frames.len() as u32,
+        minimum_frame_count: source.frames.len() as u32,
+        maximum_frame_count: source.frames.len() as u32,
+        fps: source.fps.round().max(1.0) as u32,
+        looping: source.looping,
+        allow_interpolation: true,
+        allow_auto_adjust: false,
+        explanation: "Preserve this imported animation's existing frame budget during repair."
+            .into(),
+        phases: Vec::new(),
+    });
     let report_id: String = {
         let connection = state
             .db
@@ -1139,6 +1411,14 @@ fn optimize_animation_frames_inner(
     let mut frames = source.frames.clone();
     let mut removed_frames = 0_u32;
     let mut inserted_frames = 0_u32;
+    let mut replaced_frames = 0_u32;
+    let fixed_budget = plan.frame_mode != "auto" || !plan.allow_auto_adjust;
+    let optimization_id = Uuid::new_v4().to_string();
+    let root = workspace_path(state, &source.workspace_id)?;
+    let output_directory = root
+        .join("assets")
+        .join("repairs")
+        .join(format!("loop-{}", &optimization_id[..8]));
 
     let mut duplicates: Vec<usize> = checks
         .iter()
@@ -1151,16 +1431,54 @@ fn optimize_animation_frames_inner(
         .collect();
     duplicates.sort_unstable();
     duplicates.dedup();
-    duplicates.reverse();
-    for index in duplicates.into_iter().take(change_limit) {
-        if frames.len() <= plan.minimum_frame_count as usize || index >= frames.len() {
-            continue;
+    if fixed_budget {
+        let mut repairs: Vec<usize> = checks
+            .iter()
+            .filter(|check| {
+                !check.ignored
+                    && check.severity != "info"
+                    && matches!(
+                        check.repair_action.as_deref(),
+                        Some("remove_duplicate" | "regenerate_transition")
+                    )
+            })
+            .filter_map(|check| check.frame_index.map(|index| index as usize))
+            .collect();
+        repairs.sort_unstable();
+        repairs.dedup();
+        for index in repairs.into_iter().take(change_limit) {
+            let Some((first_index, second_index)) =
+                interpolation_neighbors(index, source.frames.len(), source.looping)
+            else {
+                continue;
+            };
+            let duration_ms = source.frames[index]
+                .duration_ms
+                .unwrap_or_else(|| (1000.0 / source.fps).round() as u32);
+            frames[index] = create_interpolated_repair(
+                app,
+                state,
+                &source,
+                first_index,
+                second_index,
+                &output_directory,
+                &format!("repair_{:02}.png", index + 1),
+                duration_ms,
+            )?;
+            replaced_frames += 1;
         }
-        frames.remove(index);
-        removed_frames += 1;
+    } else {
+        duplicates.reverse();
+        for index in duplicates.into_iter().take(change_limit) {
+            if frames.len() <= plan.minimum_frame_count as usize || index >= frames.len() {
+                continue;
+            }
+            frames.remove(index);
+            removed_frames += 1;
+        }
     }
 
-    if removed_frames == 0 && plan.allow_interpolation {
+    if !fixed_budget && removed_frames == 0 && plan.allow_interpolation {
         let mut transitions: Vec<usize> = checks
             .iter()
             .filter(|check| {
@@ -1173,12 +1491,6 @@ fn optimize_animation_frames_inner(
         transitions.sort_unstable();
         transitions.dedup();
         transitions.reverse();
-        let root = workspace_path(state, &source.workspace_id)?;
-        let optimization_id = Uuid::new_v4().to_string();
-        let output_directory = root
-            .join("assets")
-            .join("repairs")
-            .join(format!("transitions-{}", &optimization_id[..8]));
         for index in transitions.into_iter().take(change_limit) {
             if frames.len() >= plan.maximum_frame_count as usize
                 || index == 0
@@ -1186,48 +1498,34 @@ fn optimize_animation_frames_inner(
             {
                 continue;
             }
-            let first_asset = get_asset(state, &frames[index - 1].asset_id)?;
-            let second_asset = get_asset(state, &frames[index].asset_id)?;
-            let first = image::open(&first_asset.path)?.to_rgba8();
-            let second = image::open(&second_asset.path)?.to_rgba8();
-            let transition = interpolate_rgba(&first, &second)?;
-            std::fs::create_dir_all(&output_directory)?;
-            app.asset_protocol_scope()
-                .allow_directory(&output_directory, true)
-                .map_err(|error| CommandError::new("asset_scope_error", error.to_string()))?;
-            let path = output_directory.join(format!("transition_{:02}.png", index));
-            transition.save(&path)?;
-            let asset = inspect(&source.workspace_id, &root, &path, None)?;
-            upsert(state, &asset, "quality_transition_insertion")?;
-            if let Some(worktree_id) = &source.worktree_id {
-                let connection = state.db.lock().map_err(|_| {
-                    CommandError::new("database_locked", "Database lock was poisoned")
-                })?;
-                connection.execute(
-                    "INSERT OR REPLACE INTO asset_worktrees(asset_id,worktree_id,relationship,created_at) VALUES (?1,?2,'owned',?3)",
-                    params![asset.id, worktree_id, Utc::now().to_rfc3339()],
-                )?;
-            }
             let duration_ms = frames[index]
                 .duration_ms
                 .unwrap_or_else(|| (1000.0 / source.fps).round() as u32);
             frames.insert(
                 index,
-                AnimationFrame {
-                    asset_id: asset.id,
-                    duration_ms: Some(duration_ms),
-                },
+                create_interpolated_repair(
+                    app,
+                    state,
+                    &source,
+                    index - 1,
+                    index,
+                    &output_directory,
+                    &format!("transition_{:02}.png", index),
+                    duration_ms,
+                )?,
             );
             inserted_frames += 1;
         }
     }
-    if removed_frames == 0 && inserted_frames == 0 {
+    if removed_frames == 0 && inserted_frames == 0 && replaced_frames == 0 {
         return Err(CommandError::new(
             "no_frame_optimizations",
-            "No eligible duplicate removals or transition insertions fit this animation's frame policy",
+            "No eligible duplicate or transition repairs fit this animation's frame policy",
         ));
     }
-    let summary = if removed_frames > 0 {
+    let summary = if replaced_frames > 0 {
+        format!("Replaced {replaced_frames} weak frame(s) without changing the fixed frame budget")
+    } else if removed_frames > 0 {
         format!("Removed {removed_frames} redundant frame(s) within the dynamic frame budget")
     } else {
         format!("Inserted {inserted_frames} interpolated transition frame(s) within the dynamic frame budget")
@@ -1238,7 +1536,7 @@ fn optimize_animation_frames_inner(
             id: None,
             workspace_id: source.workspace_id.clone(),
             worktree_id: source.worktree_id.clone(),
-            name: format!("{} — optimized {}f", source.name, frames.len()),
+            name: format!("{} — repaired {}f", source.name, frames.len()),
             fps: source.fps,
             looping: source.looping,
             frames,
@@ -1254,15 +1552,26 @@ fn optimize_animation_frames_inner(
         connection.execute(
             r#"UPDATE animation_revisions
                SET parent_animation_id=?2,source_quality_report_id=?3,
-                   change_kind='frame_optimization',summary=?4
+                   change_kind=?4,summary=?5
                WHERE animation_id=?1"#,
-            params![optimized.id, source.id, report_id, summary],
+            params![
+                optimized.id,
+                source.id,
+                report_id,
+                if replaced_frames > 0 {
+                    "fixed_frame_repair"
+                } else {
+                    "frame_optimization"
+                },
+                summary
+            ],
         )?;
     }
     Ok(FrameOptimizationResult {
         animation: optimized,
         removed_frames,
         inserted_frames,
+        replaced_frames,
         summary,
     })
 }
@@ -1466,8 +1775,9 @@ pub async fn repair_animation_alignment(
 #[cfg(test)]
 mod tests {
     use super::{
-        align_frame_to_canvas, compute_metrics, interpolate_rgba, pixel_difference,
-        rebalance_motion_plan,
+        align_frame_to_canvas, compute_metrics, interpolate_rgba, interpolation_neighbors,
+        leg_alternation_checks, limb_shading_checks, lower_body_view, pixel_difference,
+        rebalance_motion_plan, AnalyzedFrame, FrameMetrics, LowerBodyView,
     };
     use crate::models::{MotionPhase, MotionPlan};
     use image::{Rgba, RgbaImage};
@@ -1524,6 +1834,16 @@ mod tests {
     }
 
     #[test]
+    fn fixed_loop_repairs_use_neighbors_without_changing_the_budget() {
+        assert_eq!(interpolation_neighbors(0, 8, true), Some((7, 1)));
+        assert_eq!(interpolation_neighbors(3, 8, true), Some((2, 4)));
+        assert_eq!(interpolation_neighbors(7, 8, true), Some((6, 0)));
+        assert_eq!(interpolation_neighbors(0, 8, false), None);
+        assert_eq!(interpolation_neighbors(7, 8, false), None);
+        assert_eq!(interpolation_neighbors(1, 2, true), None);
+    }
+
+    #[test]
     fn optimization_rebalances_phase_counts_to_the_new_budget() {
         let plan = MotionPlan {
             frame_mode: "auto".into(),
@@ -1577,5 +1897,150 @@ mod tests {
             8
         );
         assert!(expanded.phases[1].frame_count > 2);
+    }
+
+    fn walker_frame(left_leg: Rgba<u8>, right_leg: Rgba<u8>, merged: bool) -> AnalyzedFrame {
+        let mut image = RgbaImage::new(16, 24);
+        for y in 2..13usize {
+            for x in 4..12usize {
+                image.put_pixel(x as u32, y as u32, Rgba([180, 180, 180, 255]));
+            }
+        }
+        let leg_columns: Vec<u32> = if merged {
+            (5..12).collect()
+        } else {
+            (5..8).chain(9..12).collect()
+        };
+        for y in 13..23usize {
+            for x in &leg_columns {
+                let color = if *x < 8 { left_leg } else { right_leg };
+                image.put_pixel(*x, y as u32, color);
+            }
+        }
+        AnalyzedFrame {
+            metrics: FrameMetrics {
+                asset_id: Uuid::new_v4().to_string(),
+                content_hash: String::new(),
+                width: 16,
+                height: 24,
+                bounds: Some((4, 2, 11, 22)),
+                centroid: None,
+                alpha_coverage: 0.4,
+                opaque_edge_pixels: 0,
+                perceptual_hash: 0,
+                palette: (0.0, 0.0, 0.0),
+            },
+            image,
+        }
+    }
+
+    const NEAR_LEG: Rgba<u8> = Rgba([220, 220, 220, 255]);
+    const FAR_LEG: Rgba<u8> = Rgba([120, 120, 120, 255]);
+
+    #[test]
+    fn lower_limb_blobs_separate_two_legs_and_measure_shading() {
+        let frame = walker_frame(FAR_LEG, NEAR_LEG, false);
+        let blobs = match lower_body_view(&frame.image, frame.metrics.bounds) {
+            LowerBodyView::TwoBlobs(blobs) => blobs,
+            other => panic!("two legs should split, got {other:?}"),
+        };
+        assert_eq!(blobs.len(), 2);
+        assert!(blobs[0].max_x < blobs[1].min_x, "blobs must be left-to-right");
+        let gap = (blobs[0].luminance - blobs[1].luminance).abs();
+        assert!(
+            (gap - 100.0).abs() < 1.0,
+            "dark far leg vs light near leg should be ~100 apart, got {gap}"
+        );
+    }
+
+    #[test]
+    fn passing_pose_legs_merge_into_one_blob_and_are_skipped() {
+        let frame = walker_frame(FAR_LEG, NEAR_LEG, true);
+        assert_eq!(
+            lower_body_view(&frame.image, frame.metrics.bounds),
+            LowerBodyView::Indistinct,
+            "a merged passing pose must classify as indistinct"
+        );
+    }
+
+    #[test]
+    fn shading_lock_break_flags_only_the_flat_frames() {
+        let analyzed = vec![
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+            walker_frame(NEAR_LEG, FAR_LEG, false),
+            walker_frame(NEAR_LEG, NEAR_LEG, false),
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+        ];
+        let checks = limb_shading_checks(&analyzed);
+        assert_eq!(checks.len(), 1, "only the shading-less frame flags");
+        assert_eq!(checks[0].frame_index, Some(2));
+        assert_eq!(checks[0].check_type, "limb_identity");
+        assert!(checks[0].message.contains("far-limb shading lock"));
+        assert_eq!(checks[0].repair_action, Some("regenerate"));
+    }
+
+    #[test]
+    fn animations_without_a_shading_lock_never_flag() {
+        let analyzed = vec![
+            walker_frame(NEAR_LEG, NEAR_LEG, false),
+            walker_frame(NEAR_LEG, NEAR_LEG, false),
+            walker_frame(NEAR_LEG, NEAR_LEG, false),
+            walker_frame(NEAR_LEG, NEAR_LEG, false),
+        ];
+        assert!(
+            limb_shading_checks(&analyzed).is_empty(),
+            "no established lock means nothing to break"
+        );
+    }
+
+    #[test]
+    fn hop_dominant_cycles_flag_as_lost_leg_alternation() {
+        // One split contact pose, then the legs fuse for the rest of the
+        // cycle — the exact shape of a failed AI run cycle.
+        let analyzed = vec![
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+            walker_frame(FAR_LEG, NEAR_LEG, true),
+            walker_frame(FAR_LEG, NEAR_LEG, true),
+            walker_frame(FAR_LEG, NEAR_LEG, true),
+            walker_frame(FAR_LEG, NEAR_LEG, true),
+            walker_frame(FAR_LEG, NEAR_LEG, true),
+        ];
+        let checks = leg_alternation_checks(&analyzed);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].check_type, "leg_separation");
+        assert_eq!(checks[0].severity, "error", "5/6 fused frames is severe");
+        assert!(checks[0].message.contains("plays as a hop"));
+        assert!(checks[0].message.contains("split stances"));
+        assert_eq!(checks[0].frame_index, None, "the whole cycle is flagged");
+        assert_eq!(checks[0].repair_action, Some("regenerate"));
+    }
+
+    #[test]
+    fn alternating_run_cycles_with_gathered_flights_stay_clean() {
+        let analyzed = vec![
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+            walker_frame(FAR_LEG, NEAR_LEG, true),
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+            walker_frame(FAR_LEG, NEAR_LEG, true),
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+            walker_frame(FAR_LEG, NEAR_LEG, false),
+        ];
+        assert!(
+            leg_alternation_checks(&analyzed).is_empty(),
+            "two gathered flight frames in eight is a healthy run"
+        );
+    }
+
+    #[test]
+    fn idle_stances_with_always_together_legs_never_flag() {
+        let analyzed = (0..6)
+            .map(|_| walker_frame(NEAR_LEG, NEAR_LEG, true))
+            .collect::<Vec<_>>();
+        assert!(
+            leg_alternation_checks(&analyzed).is_empty(),
+            "no separated-leg frame means no proof of leg alternation to lose"
+        );
     }
 }

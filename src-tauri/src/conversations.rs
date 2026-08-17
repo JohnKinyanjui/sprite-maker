@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
 use uuid::Uuid;
 
-fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Conversation> {
+pub(crate) fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Conversation> {
     Ok(Conversation {
         id: row.get(0)?,
         workspace_id: row.get(1)?,
@@ -136,6 +136,39 @@ pub fn rename_conversation(
         ));
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn switch_conversation_provider(
+    id: String,
+    provider: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Conversation> {
+    if !matches!(provider.as_str(), "codex" | "claude" | "gemini" | "grok") {
+        return Err(CommandError::new(
+            "provider_unsupported",
+            "Choose one of the installed chat providers",
+        ));
+    }
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    let changed = connection.execute(
+        "UPDATE conversations SET provider = ?1, provider_session_id = NULL, updated_at = ?2 WHERE id = ?3 AND archived_at IS NULL",
+        params![provider, Utc::now().to_rfc3339(), id],
+    )?;
+    if changed == 0 {
+        return Err(CommandError::new(
+            "conversation_not_found",
+            "Chat was not found",
+        ));
+    }
+    connection.query_row(
+        "SELECT id, workspace_id, worktree_id, title, provider, provider_session_id, created_at, updated_at, archived_at FROM conversations WHERE id = ?1",
+        [id],
+        conversation_row,
+    ).map_err(Into::into)
 }
 
 #[tauri::command]

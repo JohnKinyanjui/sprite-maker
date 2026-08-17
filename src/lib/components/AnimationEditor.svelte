@@ -16,7 +16,7 @@
     onSelected: (animation: Animation) => void; onTemplateApplication: (application:TemplateApplication)=>void;
     onError: (message: string) => void; onNotice: (message: string) => void;
   } = $props();
-  let loadedId = $state<string | undefined>();
+  let selectedPropId = $state<string | undefined>();
   let animationId = $state<string | undefined>();
   let name = $state("New animation");
   let fps = $state(10);
@@ -39,11 +39,7 @@
   let optimizing = $state(false);
 
   $effect(() => {
-    if (selectedAnimation && selectedAnimation.id !== loadedId) {
-      loadedId = selectedAnimation.id; animationId = selectedAnimation.id; name = selectedAnimation.name;
-      fps = selectedAnimation.fps; looping = selectedAnimation.looping; frames = selectedAnimation.frames.map(frame => ({...frame})); activeFrame = 0; playing = false;
-      qualityReport=undefined;qualityJob=undefined;void loadQuality(selectedAnimation.id);
-    }
+    if (selectedAnimation && selectedAnimation.id !== selectedPropId) loadAnimation(selectedAnimation);
   });
   $effect(() => {
     if (!active || !playing || !frames.length) return;
@@ -61,9 +57,11 @@
   let nextAsset = $derived(activeFrame < frames.length-1 ? assets.find(asset => asset.id === frames[activeFrame+1]?.assetId) : looping && frames.length > 1 ? assets.find(asset => asset.id === frames[0]?.assetId) : undefined);
   const frameAsset = (frame: AnimationFrame) => assets.find(asset => asset.id === frame.assetId);
   const frameSeverity = (index:number) => qualityReport?.checks.some(check=>check.frameIndex===index&&check.severity==="error"&&!check.ignored)?"error":qualityReport?.checks.some(check=>check.frameIndex===index&&check.severity==="warning"&&!check.ignored)?"warning":qualityReport?"good":"";
-  let canOptimize = $derived(Boolean(selectedAnimation?.id===animationId&&selectedAnimation?.motionPlan?.frameMode==="auto"&&selectedAnimation?.motionPlan?.allowAutoAdjust&&qualityReport?.checks.some(check=>!check.ignored&&["remove_duplicate","regenerate_transition"].includes(check.repairAction??""))));
+  let canOptimize = $derived(Boolean(animationId&&qualityReport?.checks.some(check=>!check.ignored&&check.severity!=="info"&&["remove_duplicate","regenerate_transition"].includes(check.repairAction??""))));
 
-  function newAnimation() { loadedId=undefined;animationId=undefined;name="New animation";fps=10;looping=true;frames=[];activeFrame=0;playing=false;qualityOpen=false;qualityReport=undefined;qualityJob=undefined; }
+  function loadAnimation(animation:Animation){selectedPropId=animation.id;animationId=animation.id;name=animation.name;fps=animation.fps;looping=animation.looping;frames=animation.frames.map(frame=>({...frame}));activeFrame=0;playing=false;qualityReport=undefined;qualityJob=undefined;void loadQuality(animation.id);}
+  function startNewAnimationDraft() { animationId=undefined;name="New animation";fps=10;looping=true;frames=[];activeFrame=0;playing=false;qualityOpen=false;qualityReport=undefined;qualityJob=undefined; }
+  function selectAnimation(animation:Animation){loadAnimation(animation);onSelected(animation);}
   function addFrame(assetId: string) { frames = [...frames, {assetId}]; activeFrame = frames.length - 1; }
   function removeFrame(index: number) { frames = frames.filter((_, i) => i !== index); activeFrame = Math.max(0, Math.min(activeFrame, frames.length - 1)); }
   function duplicate(index: number) { frames = [...frames.slice(0,index+1), {...frames[index]}, ...frames.slice(index+1)]; activeFrame=index+1; }
@@ -80,7 +78,7 @@
     saving=true;
     try {
       const animation=await api.saveAnimation({id:animationId,workspaceId,worktreeId,name,fps:Number(fps),looping,frames});
-      animationId=animation.id;loadedId=animation.id;onSelected(animation);onAnimations(await api.listAnimations(workspaceId,worktreeId));onNotice("Animation saved");
+      selectedPropId=animation.id;animationId=animation.id;onSelected(animation);onAnimations(await api.listAnimations(workspaceId,worktreeId));onNotice("Animation saved");
     } catch(error){onError(errorMessage(error));} finally{saving=false;}
   }
   async function exportSheet() {
@@ -106,9 +104,9 @@
 </script>
 
 <section class="editor">
-  <header><div><h1>Animation editor</h1><p>{animations.length} animation{animations.length===1?"":"s"} · {templates.length} template{templates.length===1?"":"s"} · {frames.length} frame{frames.length===1?"":"s"}</p></div><div class="actions"><button onclick={newAnimation}><Plus size={13}/> New</button><button onclick={()=>templateDialog=true} disabled={!animationId||!frames.length}><FileKey2 size={13}/> Save template</button><button onclick={()=>{qualityOpen=true;if(!qualityReport&&!qualityJob)void analyze()}} disabled={!animationId||!frames.length||repairing}><ShieldCheck size={13}/>{repairing?"Repairing…":qualityReport?Math.round(qualityReport.overallScore):"Quality"}</button><button onclick={save} disabled={saving}><Save size={13}/>{saving?"Saving…":"Save"}</button><button class="primary" onclick={exportSheet} disabled={!animationId || !frames.length}><Download size={13}/> Export</button></div></header>
+  <header><div><h1>Animation editor</h1><p>{animations.length} animation{animations.length===1?"":"s"} · {templates.length} template{templates.length===1?"":"s"} · {frames.length} frame{frames.length===1?"":"s"}</p></div><div class="actions"><button type="button" onclick={() => startNewAnimationDraft()}><Plus size={13}/> New</button><button onclick={()=>templateDialog=true} disabled={!animationId||!frames.length}><FileKey2 size={13}/> Save template</button><button onclick={()=>{qualityOpen=true;if(!qualityReport&&!qualityJob)void analyze()}} disabled={!animationId||!frames.length||repairing}><ShieldCheck size={13}/>{repairing?"Repairing…":qualityReport?Math.round(qualityReport.overallScore):"Quality"}</button><button onclick={save} disabled={saving}><Save size={13}/>{saving?"Saving…":"Save"}</button><button class="primary" onclick={exportSheet} disabled={!animationId || !frames.length}><Download size={13}/> Export</button></div></header>
   <div class="body" class:with-quality={qualityOpen}>
-    <aside class="animation-list"><div class="label">ANIMATIONS</div>{#each animations as animation}<button class:active={animation.id===animationId} onclick={()=>onSelected(animation)}><Clapperboard size={13}/><span>{animation.name}</span><small>{animation.frames.length}</small></button>{/each}{#if !animations.length}<p>No saved animations</p>{/if}<div class="label templates-label">MOTION TEMPLATES</div>{#each templates as template}<button class="template" onclick={()=>applyingTemplate=template}><FileKey2 size={13}/><span>{template.name}</span><small>{template.frameMode==="auto"?`${template.minFrames}–${template.maxFrames}`:template.preferredFrames}</small></button>{/each}{#if !templates.length}<p>Save an animation as reusable motion</p>{/if}</aside>
+    <aside class="animation-list"><div class="label">ANIMATIONS</div>{#each animations as animation}<button class:active={animation.id===animationId} onclick={()=>selectAnimation(animation)}><Clapperboard size={13}/><span>{animation.name}</span><small>{animation.frames.length}</small></button>{/each}{#if !animations.length}<p>No saved animations</p>{/if}<div class="label templates-label">MOTION TEMPLATES</div>{#each templates as template}<button class="template" onclick={()=>applyingTemplate=template}><FileKey2 size={13}/><span>{template.name}</span><small>{template.frameMode==="auto"?`${template.minFrames}–${template.maxFrames}`:template.preferredFrames}</small></button>{/each}{#if !templates.length}<p>Save an animation as reusable motion</p>{/if}</aside>
     <div class="workspace">
       <div class="properties"><label>Name<input bind:value={name}/></label><label>FPS<input type="number" min="1" max="60" bind:value={fps}/></label><label class="check"><input type="checkbox" bind:checked={looping}/><Repeat2 size={12}/> Loop</label><label>Preview<select bind:value={scale}><option value={1}>1×</option><option value={2}>2×</option><option value={3}>3×</option><option value={4}>4×</option></select></label><label class="check"><input type="checkbox" bind:checked={onionSkin}/> Onion skin</label>{#if onionSkin}<label class="onion-opacity">Opacity<input aria-label="Onion skin opacity" type="range" min="0.08" max="0.55" step="0.01" bind:value={onionOpacity}/></label>{/if}</div>
       <div class="preview-area">

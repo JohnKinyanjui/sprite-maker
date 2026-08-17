@@ -5,6 +5,23 @@ function includesToken(content: string, token: string | undefined): boolean {
   return Boolean(value && value.length >= 4 && content.includes(value));
 }
 
+const GENERIC_ANIMATION_WORDS = new Set([
+  "animation", "animated", "sprite", "sprites", "frame", "frames", "asset", "assets",
+  "cozy", "pixel", "traveling", "walking", "moving", "motion", "preview",
+]);
+
+function mentionsAnimation(content: string, name: string): boolean {
+  if (includesToken(content, name)) return true;
+  // Agent responses usually use a readable subject name ("caterpillar")
+  // rather than the exact generated identifier ("cozy_caterpillar_traveling_wave").
+  // A distinctive name token is enough to bind the real preview component.
+  return name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(word => word.length >= 5 && !GENERIC_ANIMATION_WORDS.has(word))
+    .some(word => includesToken(content, word));
+}
+
 function generationFromAnimation(animation: Animation, assets: Asset[]): SpriteGenerationMetadata | undefined {
   const frames = animation.frames
     .map(frame => assets.find(asset => asset.id === frame.assetId))
@@ -38,7 +55,7 @@ export function inferMessageGeneration(message: Message, assets: Asset[], animat
 
   const candidates = animations
     .map(animation => {
-      const nameMatch = animation.name.length >= 8 && includesToken(content, animation.name);
+      const nameMatch = animation.name.length >= 8 && mentionsAnimation(content, animation.name);
       const frameMatches = animation.frames.filter(frame => mentionedIds.has(frame.assetId)).length;
       return { animation, nameMatch, frameMatches };
     })
@@ -80,6 +97,10 @@ export function contentWithoutSpriteOutputLinks(content: string): string {
     .replace(/^\s*(?:frames?|outputs?|files?)(?:\s+are\s+in)?\s*:\s*(?:assets|\.sprite-studio)[\\/].*$/gim, "")
     .replace(/\s*[-·]?\s*\[Frame\s+\d+\]\([^)]+\.png\)/gi, "")
     .replace(/^The source \[Sprite Studio spec\].*$/gim, "")
+    // The desktop chat does not execute visualization directives. Once an
+    // artifact card is present, hiding this raw fallback avoids showing the
+    // user a fake component declaration as plain text.
+    .replace(/^.*visualize.*(?:"path"|\.html).*$/gim, "")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

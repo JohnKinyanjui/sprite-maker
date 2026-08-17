@@ -1,5 +1,7 @@
-export type StylePresetId = "pixel-rpg" | "graphic-adventure" | "cozy-chibi" | "limited-palette" | "isometric-pixel" | "painterly-fantasy" | "cel-shaded" | "one-bit";
-export type ConversationStyleId = StylePresetId | "inherit";
+import type { CustomArtStyle } from "$lib/library-types";
+
+export type StylePresetId = string;
+export type ConversationStyleId = string;
 
 export type StylePreset = {
   id: StylePresetId;
@@ -68,14 +70,18 @@ export const STYLE_PRESETS: StylePreset[] = [
   },
 ];
 
-export function parseStylePreset(value: unknown): StylePresetId {
-  return STYLE_PRESETS.some(preset => preset.id === value) ? value as StylePresetId : "pixel-rpg";
+export function allStylePresets(custom: CustomArtStyle[] = []): StylePreset[] {
+  return [...STYLE_PRESETS, ...custom.map(art => ({ id: art.id, name: art.name, description: art.description, thumbnail: art.thumbnail, prompt: art.prompt }))];
 }
 
-export function parseConversationStyle(value: unknown): ConversationStyleId {
-  return value === "inherit" ? "inherit" : STYLE_PRESETS.some(preset => preset.id === value) ? value as StylePresetId : "inherit";
+export function parseStylePreset(value: unknown, custom: CustomArtStyle[] = []): StylePresetId {
+  return allStylePresets(custom).some(preset => preset.id === value) ? String(value) : "pixel-rpg";
 }
 
-export function stylePreset(id: StylePresetId): StylePreset {
-  return STYLE_PRESETS.find(preset => preset.id === id) ?? STYLE_PRESETS[0];
+export function parseConversationStyle(value: unknown, custom: CustomArtStyle[] = []): ConversationStyleId {
+  return value === "inherit" ? "inherit" : allStylePresets(custom).some(preset => preset.id === value) ? String(value) : "inherit";
+}
+
+export function stylePreset(id: StylePresetId, custom: CustomArtStyle[] = []): StylePreset {
+  return allStylePresets(custom).find(preset => preset.id === id) ?? STYLE_PRESETS[0];
 }

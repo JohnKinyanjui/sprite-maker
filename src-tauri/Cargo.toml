@@ -32,6 +32,8 @@ which = "7"
 libc = "0.2"
 thiserror = "2"
 blake3 = "1.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

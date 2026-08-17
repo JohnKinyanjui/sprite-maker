@@ -10,6 +10,16 @@ pub struct Workspace {
     pub last_opened_at: String,
 }
 
+/// One-round-trip sidebar payload: every project plus the active project's
+/// worktrees and chats, read under a single database lock.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarSnapshot {
+    pub workspaces: Vec<Workspace>,
+    pub worktrees: Vec<Worktree>,
+    pub conversations: Vec<Conversation>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Worktree {
@@ -195,6 +205,31 @@ pub struct ProviderStatus {
     pub detail: String,
     pub modes: Vec<ProviderMode>,
     pub capabilities: ProviderCapabilities,
+    #[serde(default)]
+    pub configurable: bool,
+    #[serde(default)]
+    pub has_api_key: bool,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageProviderInput {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConnectionTest {
+    pub ok: bool,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,11 +262,15 @@ fn default_frame_mode() -> String {
 }
 
 fn default_min_frames() -> u32 {
-    4
+    8
 }
 
 fn default_max_frames() -> u32 {
-    32
+    12
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_true() -> bool {
@@ -252,7 +291,7 @@ pub struct GenerationOptions {
     pub min_frames: u32,
     #[serde(default = "default_max_frames")]
     pub max_frames: u32,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub allow_interpolation: bool,
     #[serde(default = "default_true")]
     pub allow_auto_adjust: bool,
@@ -269,10 +308,10 @@ mod generation_option_tests {
                 .expect("generation options should deserialize");
 
         assert_eq!(options.frame_mode, "auto");
-        assert_eq!(options.min_frames, 4);
-        assert_eq!(options.max_frames, 32);
+        assert_eq!(options.min_frames, 8);
+        assert_eq!(options.max_frames, 12);
         assert!(options.allow_auto_adjust);
-        assert!(options.allow_interpolation);
+        assert!(!options.allow_interpolation);
     }
 }
 
@@ -309,6 +348,7 @@ pub struct ProviderRequestOptions {
     pub generation: Option<GenerationOptions>,
     #[serde(default)]
     pub reference_ids: Vec<String>,
+    pub image_provider_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -542,6 +582,7 @@ pub struct FrameOptimizationResult {
     pub animation: Animation,
     pub removed_frames: u32,
     pub inserted_frames: u32,
+    pub replaced_frames: u32,
     pub summary: String,
 }
 

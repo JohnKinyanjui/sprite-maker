@@ -21,6 +21,7 @@ Turn the user's intent into real, game-ready PNG files. The Rust harness routes 
 - `creature`: follow `references/creature-harness.md`. Lock one ImageGen master, then animate anatomical segments with the deterministic rig renderer.
 - `effect`: follow `references/effect-harness.md`. ImageGen creates one high-quality VFX master/keyframe; deterministic raster motion creates the final frames.
 - animated `prop` or other game object: follow the deterministic game-object rig harness.
+- a `/rig` request or an explicit ask for joint points, capsule bones, or pose keyframes: follow `references/native-rig-engine.md`. Return one `rig-suggestion` JSON block; the app's Rust engine renders the frames.
 - full `terrain tileset`: follow `references/terrain-tileset-harness.md` and return one atlas PNG, never one file per tile.
 - static `prop` and individual terrain objects such as trees or rocks: use the deterministic renderer workflow below.
 

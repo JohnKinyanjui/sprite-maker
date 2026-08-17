@@ -18,7 +18,7 @@
 
 Generating one attractive image is easy. A production asset also needs a stable identity, clean transparency, readable scale, consistent palette, useful file structure, and—when it moves—a mechanically complete loop.
 
-Sprite Studio keeps that work in one desktop workspace. Describe an asset in chat, attach or paste references, inspect the result at pixel scale, animate it with an anatomy-aware rig, repair difficult poses with AI, test the loop, and export a sheet without losing the source files or the conversation that produced them.
+Sprite Studio keeps that work in one desktop workspace. Describe an asset in chat, attach or paste references, inspect the result at pixel scale, generate a high-frame-count AI animation with strict identity and neighbor references, test the loop, and export a sheet without losing the source files or the conversation that produced them.
 
 The project is open source, local first, and built with Tauri, Svelte, Rust, SQLite, and an installed Codex CLI. It does not target Android or iOS.
 
@@ -27,8 +27,19 @@ The project is open source, local first, and built with Tauri, Svelte, Rust, SQL
 1. **Generate in chat.** Use plain language or a slash command. Every chat keeps its own style, references, quality, dimensions, frame policy, FPS, model, and reasoning settings.
 2. **Review the real output.** Static images open in the full-size sprite viewer. Related animation frames appear as one playable sprite set instead of flooding the library.
 3. **Describe natural movement.** “Animate this” brings the source asset back to chat and asks how it should move, with suggestions based on visible anatomy.
-4. **Rig first, polish second.** AI proposes the rig, masks, physical envelope, and key poses. Deterministic tools render the loop. Optional AI polish repairs difficult joints without inventing a different subject each frame.
-5. **Test and export.** Scrub, retime, zoom, inspect warnings, test the loop in the playground, and export a PNG sheet plus metadata.
+4. **Plan once, generate sequentially.** AI plans the complete motion, then generates one frame at a time using the source identity and neighboring accepted frames. The default 24–48 frame range favors smooth motion; users can lower it at any time.
+5. **Rig it with points when you want determinism.** The Rig editor places named joint points and capsule bones on any sprite — auto-placed from an anatomy template, suggested by the AI (`/rig` or “Ask AI”), or dragged by hand. The native Rust engine derives every bone's pixels from the capsules, solves planted contacts with two-bone IK, and renders byte-identical frames with no image generation at all.
+6. **Test and export.** Scrub, retime, zoom, inspect warnings, test the loop in the playground, and export a PNG sheet plus metadata.
+
+## Rigging in Rust
+
+The rig engine is written natively in Rust and runs instantly on the local machine:
+
+- **Points over masks.** A rig is a set of named points (`joint`, `anchor`, `contact`, `pivot`) and capsule bones between them. The engine auto-claims every opaque pixel inside the closest capsule and assigns leftovers to the nearest bone, so nobody hand-paints masks.
+- **AI-suggested points.** `Ask AI` sends the sprite to your agent CLI and gets back a `rig-suggestion` JSON block of points, bones, and optional pose frames, with confidence values. `/rig` in chat does the same and the captured rig appears in the Rig tab automatically.
+- **Deterministic rendering.** Per-frame bone rotations, scales, offsets, root motion, holds, and z-layering compose through parent chains and render with nearest-neighbor inverse mapping — identical inputs always produce identical PNG bytes.
+- **Planted contacts.** Feet and hands stay pinned in place while the chain bends around them using analytic two-bone IK, so walk cycles do not slide.
+- **Full pipeline.** Rendered frames land in `assets/<category>/`, become normal assets, form an animation with quality analysis, and flow into sheets, the playground, and exports like any other sprite.
 
 ## Motion that understands the subject
 
@@ -133,13 +144,13 @@ A plain-language prompt still works. The router infers the correct harness and a
 flowchart LR
     A["Prompt and chat references"] --> B["Sprite Director"]
     B --> C["One focused source master"]
-    C --> D["AI rig, masks, physics, and key poses"]
-    D --> E["Deterministic frame rendering"]
-    E --> F["Optional regional AI polish"]
+    C --> D["AI motion plan and physical phases"]
+    D --> E["Sequential high-quality AI frames"]
+    E --> F["Identity, neighbor, edge, and loop checks"]
     F --> G["Validation, playback, and export"]
 ```
 
-Image generation is used where it adds value: creating a new master, improving motion-readiness, building an illustrated terrain atlas, or repairing a difficult region. It is not asked to reinvent every frame independently. Raw AI edits are normalized back to the exact canvas, transparency, palette, and intended pose before they enter the asset library.
+Animation frames are generated individually in playback order, never as a pose sheet. Every call uses the exact identity reference and temporal neighbors; raw results are normalized back to the requested canvas, transparency, crisp palette, safe edge padding, and intended pose before entering the asset library.
 
 ## Desktop workbench
 
@@ -151,9 +162,10 @@ The left sidebar is reserved for worktrees and conversations. Creative tools sta
 | Sprites | `Cmd/Ctrl+2` | Browse grouped assets, filter by category or pack, and open the sprite viewer |
 | References | `Cmd/Ctrl+3` | Manage chat-scoped source and style references |
 | Animate | `Cmd/Ctrl+4` | Play, scrub, retime, inspect, and repair loops |
-| Sheets | `Cmd/Ctrl+5` | Build sprite sheets and metadata |
-| Packs | `Cmd/Ctrl+6` | Review coordinated asset collections |
-| Playground | `Cmd/Ctrl+7` | Test gameplay scale, movement, and animation |
+| Rig | `Cmd/Ctrl+5` | Place points and bones, review AI suggestions, keyframe poses, and render deterministically |
+| Sheets | `Cmd/Ctrl+6` | Build sprite sheets and metadata |
+| Packs | `Cmd/Ctrl+7` | Review coordinated asset collections |
+| Playground | `Cmd/Ctrl+8` | Test gameplay scale, movement, and animation |
 
 VFX worktrees add their effect tools without removing the rest of the workbench.
 
@@ -210,10 +222,9 @@ exports/
   imagegen-sources/
   masters/
   packs/
-  rigs/
+  ai-frame-sources/
   reports/
   sprite_tool.py
-  sprite_rig.py
   sprite_polish.py
   terrain_cleanup.py
 ```

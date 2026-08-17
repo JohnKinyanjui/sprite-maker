@@ -2,15 +2,17 @@ use crate::{
     conversations::{add_message, get_conversation, set_provider_session, update_message},
     error::{CommandError, CommandResult},
     models::{
-        GenerationOptions, ProviderCapabilities, ProviderEvent, ProviderMode,
-        ProviderRequestOptions, ProviderStatus,
+        GenerationOptions, ImageProviderInput, ProviderCapabilities, ProviderConnectionTest,
+        ProviderEvent, ProviderMode, ProviderRequestOptions, ProviderStatus,
     },
     references,
     sprite_harness::studio_prompt,
     workspace::workspace_path,
     AppState,
 };
-use serde::Deserialize;
+use base64::Engine;
+use rusqlite::{params, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     ffi::{OsStr, OsString},
@@ -29,7 +31,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-fn find_executable(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_executable(name: &str) -> Option<PathBuf> {
     let search_path = current_provider_environment_path();
     let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if let Ok(path) = which::which_in(name, Some(search_path), current_dir) {
@@ -223,7 +225,7 @@ fn provider_environment_path(
     merge_provider_paths(inherited, login_shell.as_deref(), home)
 }
 
-fn current_provider_environment_path() -> &'static OsString {
+pub(crate) fn current_provider_environment_path() -> &'static OsString {
     static PATH: OnceLock<OsString> = OnceLock::new();
     PATH.get_or_init(|| {
         let inherited = env::var_os("PATH");
@@ -298,39 +300,429 @@ fn codex_modes(executable: &Path) -> Vec<ProviderMode> {
         .collect()
 }
 
+fn command_output(executable: &Path, arguments: &[&str]) -> Option<std::process::Output> {
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+    let token = Uuid::new_v4();
+    let stdout_path = env::temp_dir().join(format!("sprite-studio-provider-{token}.out"));
+    let stderr_path = env::temp_dir().join(format!("sprite-studio-provider-{token}.err"));
+    let result = (|| {
+        let stdout = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&stdout_path)
+            .ok()?;
+        let stderr = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&stderr_path)
+            .ok()?;
+        let mut command = StdCommand::new(executable);
+        command
+            .args(arguments)
+            .env("PATH", current_provider_environment_path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr));
+        // Provider CLIs can leave helper processes alive after the command that
+        // launched them exits. Keep every read-only probe in its own group so a
+        // timeout cleans up the whole probe without touching a real generation.
+        isolate_login_shell(&mut command);
+        let mut child = command.spawn().ok()?;
+        let deadline = Instant::now() + PROBE_TIMEOUT;
+        let status = loop {
+            match login_shell_state(&mut child) {
+                LoginShellState::Exited => break stop_login_shell(&mut child, true)?,
+                LoginShellState::Running => {}
+                LoginShellState::Error => {
+                    let _ = stop_login_shell(&mut child, false);
+                    return None;
+                }
+            }
+            if Instant::now() >= deadline {
+                let _ = stop_login_shell(&mut child, false);
+                return None;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        Some(std::process::Output {
+            status,
+            stdout: fs::read(&stdout_path).unwrap_or_default(),
+            stderr: fs::read(&stderr_path).unwrap_or_default(),
+        })
+    })();
+    let _ = fs::remove_file(stdout_path);
+    let _ = fs::remove_file(stderr_path);
+    result
+}
+
+fn provider_is_authenticated(id: &str, executable: &Path) -> bool {
+    match id {
+        "codex" => command_output(executable, &["login", "status"])
+            .is_some_and(|output| output.status.success()),
+        "claude" => command_output(executable, &["auth", "status", "--json"])
+            .filter(|output| output.status.success())
+            .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
+            .and_then(|value| value.get("loggedIn").and_then(|value| value.as_bool()))
+            .unwrap_or(false),
+        // `models` is a read-only command which requires an authenticated Grok
+        // session. It provides a stronger signal than checking credential files.
+        "grok" => {
+            command_output(executable, &["models"]).is_some_and(|output| output.status.success())
+        }
+        // Gemini has no stable auth-status command. A present executable is
+        // reported as detected until a real headless request confirms auth.
+        "gemini" => true,
+        _ => false,
+    }
+}
+
+fn grok_modes_from_output(output: &std::process::Output) -> Vec<ProviderMode> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| {
+            let value = line
+                .strip_prefix('*')
+                .or_else(|| line.strip_prefix('-'))?
+                .trim()
+                .strip_suffix("(default)")
+                .unwrap_or_else(|| line.trim_start_matches(['*', '-']).trim())
+                .trim();
+            (!value.is_empty()).then(|| ProviderMode {
+                id: value.to_string(),
+                label: value.to_string(),
+                description: "Model reported by the installed Grok CLI".into(),
+                default_reasoning_effort: "medium".into(),
+                reasoning_efforts: vec!["low".into(), "medium".into(), "high".into()],
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredImageProvider {
+    id: String,
+    name: String,
+    provider_type: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+}
+
+fn image_provider_status(provider: &StoredImageProvider) -> ProviderStatus {
+    let configured =
+        !provider.api_key.is_empty() && !provider.base_url.is_empty() && !provider.model.is_empty();
+    ProviderStatus {
+        id: provider.id.clone(),
+        name: provider.name.clone(),
+        kind: "image".into(),
+        installed: configured,
+        executable: None,
+        status: if configured { "ready" } else { "unavailable" }.into(),
+        detail: if configured {
+            format!("{} image API configured", provider.provider_type)
+        } else {
+            "Add an API key to enable this image source".into()
+        },
+        modes: vec![ProviderMode {
+            id: provider.model.clone(),
+            label: provider.model.clone(),
+            description: format!("Image model served by {}", provider.name),
+            default_reasoning_effort: String::new(),
+            reasoning_efforts: Vec::new(),
+        }],
+        capabilities: ProviderCapabilities {
+            text_input: true,
+            image_input: false,
+            multiple_image_input: false,
+            image_editing: false,
+            masks: false,
+            transparency: false,
+            structured_output: false,
+            video_animation: false,
+            image_to_image: false,
+            maximum_reference_images: 0,
+        },
+        configurable: true,
+        has_api_key: !provider.api_key.is_empty(),
+        base_url: Some(provider.base_url.clone()),
+        model: Some(provider.model.clone()),
+    }
+}
+
+fn stored_image_providers(state: &AppState) -> CommandResult<Vec<StoredImageProvider>> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    let mut statement = connection.prepare("SELECT settings_json FROM provider_settings WHERE provider LIKE 'image:%' AND enabled=1 ORDER BY provider")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(rows
+        .filter_map(Result::ok)
+        .filter_map(|json| serde_json::from_str(&json).ok())
+        .collect())
+}
+
+fn load_image_provider(state: &AppState, id: &str) -> CommandResult<Option<StoredImageProvider>> {
+    if id == "imagegen" {
+        return Ok(None);
+    }
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    let json: Option<String> = connection
+        .query_row(
+            "SELECT settings_json FROM provider_settings WHERE provider=?1 AND enabled=1",
+            [format!("image:{id}")],
+            |row| row.get(0),
+        )
+        .optional()?;
+    json.map(|value| {
+        serde_json::from_str(&value)
+            .map_err(|error| CommandError::new("invalid_provider", error.to_string()))
+    })
+    .transpose()
+}
+
+fn validate_provider_base_url(value: &str) -> CommandResult<String> {
+    let value = value.trim().trim_end_matches('/');
+    let parsed = reqwest::Url::parse(value).map_err(|_| {
+        CommandError::new(
+            "invalid_provider",
+            "Enter a valid HTTPS API base URL, such as https://api.example.com/v1",
+        )
+    })?;
+    let local_debug_url = cfg!(debug_assertions)
+        && parsed.scheme() == "http"
+        && matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if (parsed.scheme() != "https" && !local_debug_url)
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(CommandError::new(
+            "invalid_provider",
+            "Use an HTTPS API base URL without credentials, query parameters, or fragments",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn provider_from_input(
+    state: &AppState,
+    input: ImageProviderInput,
+) -> CommandResult<StoredImageProvider> {
+    let id = input.id.trim().to_lowercase();
+    let provider_type = input.provider_type.trim().to_lowercase();
+    if id.is_empty()
+        || id == "imagegen"
+        || id == "midjourney"
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(CommandError::new(
+            "invalid_provider",
+            "Use a simple provider ID containing letters, numbers, dashes, or underscores; reserved built-in IDs cannot be reused",
+        ));
+    }
+    if !matches!(provider_type.as_str(), "grok" | "openai-compatible") {
+        return Err(CommandError::new(
+            "invalid_provider",
+            "Choose Grok or an OpenAI-compatible image API",
+        ));
+    }
+    let name = input.name.trim();
+    let model = input.model.trim();
+    if name.is_empty() || model.is_empty() || name.len() > 80 || model.len() > 160 {
+        return Err(CommandError::new(
+            "invalid_provider",
+            "Display name and model ID are required",
+        ));
+    }
+    let base_url = validate_provider_base_url(&input.base_url)?;
+    let existing_key = load_image_provider(state, &id)?
+        .map(|value| value.api_key)
+        .unwrap_or_default();
+    let api_key = if input.api_key.trim().is_empty() {
+        existing_key
+    } else {
+        input.api_key.trim().to_string()
+    };
+    if api_key.is_empty() {
+        return Err(CommandError::new(
+            "invalid_provider",
+            "An API key is required. It is stored locally and never shown after saving.",
+        ));
+    }
+    Ok(StoredImageProvider {
+        id,
+        name: name.into(),
+        provider_type,
+        base_url,
+        api_key,
+        model: model.into(),
+    })
+}
+
 #[tauri::command]
-pub fn detect_providers() -> Vec<ProviderStatus> {
-    [
+pub fn save_image_provider(
+    input: ImageProviderInput,
+    state: State<'_, AppState>,
+) -> CommandResult<ProviderStatus> {
+    let provider = provider_from_input(&state, input)?;
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    connection.execute(
+        "INSERT INTO provider_settings(provider,enabled,settings_json,updated_at) VALUES (?1,1,?2,?3) ON CONFLICT(provider) DO UPDATE SET enabled=1,settings_json=excluded.settings_json,updated_at=excluded.updated_at",
+        params![format!("image:{}", provider.id), serde_json::to_string(&provider).map_err(|error| CommandError::new("invalid_provider", error.to_string()))?, chrono::Utc::now().to_rfc3339()]
+    )?;
+    Ok(image_provider_status(&provider))
+}
+
+#[tauri::command]
+pub async fn test_image_provider(
+    input: ImageProviderInput,
+    state: State<'_, AppState>,
+) -> CommandResult<ProviderConnectionTest> {
+    let provider = provider_from_input(&state, input)?;
+    let endpoint = if provider.base_url.ends_with("/models") {
+        provider.base_url.clone()
+    } else {
+        format!("{}/models", provider.base_url)
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| CommandError::new("provider_error", error.to_string()))?;
+    let response = client
+        .get(endpoint)
+        .bearer_auth(&provider.api_key)
+        .send()
+        .await
+        .map_err(|error| {
+            CommandError::new(
+                "provider_error",
+                format!("Could not reach {}: {error}", provider.name),
+            )
+        })?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(ProviderConnectionTest {
+            ok: true,
+            detail: format!(
+                "Connected to {} and authenticated successfully",
+                provider.name
+            ),
+        });
+    }
+    let detail = match status.as_u16() {
+        401 | 403 => "The endpoint was reached, but it rejected the API key",
+        404 => "The endpoint does not expose the OpenAI-compatible /models route",
+        429 => "The endpoint was reached, but it is currently rate-limiting requests",
+        _ => "The endpoint was reached, but it returned an unexpected response",
+    };
+    Err(CommandError::new(
+        "provider_test_failed",
+        format!("{detail} ({status})"),
+    ))
+}
+
+#[tauri::command]
+pub fn delete_image_provider(id: String, state: State<'_, AppState>) -> CommandResult<()> {
+    if id == "grok-image" {
+        return Err(CommandError::new(
+            "provider_builtin",
+            "The Grok entry can be cleared but not removed",
+        ));
+    }
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    connection.execute(
+        "DELETE FROM provider_settings WHERE provider=?1",
+        [format!("image:{id}")],
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn detect_providers(state: State<'_, AppState>) -> Vec<ProviderStatus> {
+    let mut providers: Vec<ProviderStatus> = [
         ("codex", "Codex CLI"),
         ("claude", "Claude Code"),
         ("gemini", "Gemini CLI"),
+        ("grok", "Grok CLI"),
     ]
     .into_iter()
     .map(|(id, name)| {
         let executable = find_executable(id);
         let installed = executable.is_some();
-        let modes = if id == "codex" {
-            executable.as_deref().map(codex_modes).unwrap_or_default()
-        } else {
-            Vec::new()
+        // Grok's authenticated `models` probe used to run twice here and can
+        // take over a minute when its session or network is unhealthy. Probe it
+        // once, with the same hard timeout as every other status command.
+        let grok_probe = (id == "grok")
+            .then(|| executable.as_deref().and_then(|path| command_output(path, &["models"])))
+            .flatten();
+        let authenticated = match (id, executable.as_deref()) {
+            ("grok", Some(_)) => grok_probe
+                .as_ref()
+                .is_some_and(|output| output.status.success()),
+            (_, Some(path)) => provider_is_authenticated(id, path),
+            (_, None) => false,
         };
-        let (status, detail) = if id == "codex" && installed {
-            (
+        let modes = match (id, executable.as_deref(), authenticated) {
+            ("codex", Some(path), true) => codex_modes(path),
+            ("grok", Some(_), true) => grok_probe
+                .as_ref()
+                .map(grok_modes_from_output)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let (status, detail) = match (id, installed, authenticated) {
+            (_, false, _) => (
+                "not_installed",
+                match id {
+                    "codex" => "Install the Codex CLI, then run `codex login`",
+                    "claude" => "Install Claude Code, then run `claude auth login`",
+                    "gemini" => "Install @google/gemini-cli, run `gemini`, and complete authentication",
+                    "grok" => "Install Grok Build, then run `grok login`",
+                    _ => "Install and authenticate this provider's CLI",
+                },
+            ),
+            ("claude", true, true) => (
+                "detected",
+                "CLI reports signed in. Claude validates the stored credentials on the first headless request; run `claude auth login` if that request returns 401.",
+            ),
+            ("gemini", true, _) => (
+                "detected",
+                "CLI detected. Authentication is verified by the first headless request.",
+            ),
+            (_, true, false) => (
+                "needs_auth",
+                match id {
+                    "codex" => "CLI detected, but `codex login status` did not confirm a session. Run `codex login`.",
+                    "claude" => "CLI detected, but `claude auth status` reports signed out. Run `claude auth login`.",
+                    "grok" => "CLI detected, but `grok models` could not verify a session. Run `grok login`.",
+                    _ => "CLI detected, but authentication could not be verified.",
+                },
+            ),
+            (_, true, true) => (
                 "ready",
-                "Installed and available for real workspace conversations",
-            )
-        } else if id == "codex" {
-            (
-                "unavailable",
-                "Install and authenticate Codex CLI to use agent conversations",
-            )
-        } else if installed {
-            (
-                "coming_later",
-                "Detected locally; adapter support is planned",
-            )
-        } else {
-            ("coming_later", "Adapter support is planned")
+                match id {
+                    "codex" => "Installed, authenticated, and ready for workspace conversations.",
+                    "claude" => "Installed and authenticated. Uses Claude Code's supported headless event stream.",
+                    "grok" => "Installed and authenticated. Uses Grok Build's supported single-turn event stream.",
+                    _ => "Installed and ready.",
+                },
+            ),
         };
         ProviderStatus {
             id: id.into(),
@@ -342,9 +734,69 @@ pub fn detect_providers() -> Vec<ProviderStatus> {
             detail: detail.into(),
             modes,
             capabilities: provider_capabilities(id),
+            configurable: false,
+            has_api_key: false,
+            base_url: None,
+            model: None,
         }
     })
-    .collect()
+    .collect();
+    providers.push(ProviderStatus {
+        id: "imagegen".into(),
+        name: "OpenAI ImageGen".into(),
+        kind: "image".into(),
+        installed: providers
+            .iter()
+            .any(|provider| provider.id == "codex" && provider.status == "ready"),
+        executable: None,
+        status: if providers
+            .iter()
+            .any(|provider| provider.id == "codex" && provider.status == "ready")
+        {
+            "ready"
+        } else {
+            "needs_codex"
+        }
+        .into(),
+        detail: "Provided through the authenticated Codex workflow; no separate image API key is required.".into(),
+        modes: Vec::new(),
+        capabilities: provider_capabilities("codex"),
+        configurable: false,
+        has_api_key: false,
+        base_url: None,
+        model: None,
+    });
+    let mut configured = stored_image_providers(&state).unwrap_or_default();
+    if !configured
+        .iter()
+        .any(|provider| provider.id == "grok-image")
+    {
+        configured.push(StoredImageProvider {
+            id: "grok-image".into(),
+            name: "Grok Imagine".into(),
+            provider_type: "grok".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key: String::new(),
+            model: "grok-imagine-image-2.0".into(),
+        });
+    }
+    providers.extend(configured.iter().map(image_provider_status));
+    providers.push(ProviderStatus {
+        id: "midjourney".into(),
+        name: "Midjourney".into(),
+        kind: "image".into(),
+        installed: false,
+        executable: None,
+        status: "unsupported".into(),
+        detail: "Use an authorized gateway. Midjourney does not offer a general public API, and Sprite Studio never automates its website or Discord bot.".into(),
+        modes: Vec::new(),
+        capabilities: provider_capabilities("unknown"),
+        configurable: true,
+        has_api_key: false,
+        base_url: None,
+        model: None,
+    });
+    providers
 }
 
 fn provider_capabilities(id: &str) -> ProviderCapabilities {
@@ -361,7 +813,7 @@ fn provider_capabilities(id: &str) -> ProviderCapabilities {
             image_to_image: true,
             maximum_reference_images: 5,
         },
-        "claude" | "gemini" => ProviderCapabilities {
+        "claude" | "gemini" | "grok" => ProviderCapabilities {
             text_input: true,
             image_input: true,
             multiple_image_input: true,
@@ -463,12 +915,162 @@ fn parse_codex_line(line: &str) -> (Option<String>, Option<String>, Option<Strin
             .or_else(|| value.get("error").and_then(|error| error.get("message")))
             .and_then(|value| value.as_str())
             .unwrap_or(line);
-        return (Some(message.to_string()), None, None);
+        // The Codex CLI emits these JSON events for recoverable transport
+        // reconnects before it has decided the overall exec result. Treat
+        // them as activity here; `child.wait()` remains the single terminal
+        // authority and will emit a real failed event if the run ultimately
+        // exits unsuccessfully. Rendering these as assistant text made a
+        // temporary websocket reconnect look like a failed sprite request.
+        return (
+            None,
+            Some(format!("Connection interrupted; recovering — {message}")),
+            None,
+        );
     }
     (None, None, None)
 }
 
-fn provider_failure_message(status: &str, stderr: &str, response: &str) -> String {
+fn provider_display_name(id: &str) -> &'static str {
+    match id {
+        "codex" => "Codex CLI",
+        "claude" => "Claude Code",
+        "gemini" => "Gemini CLI",
+        "grok" => "Grok CLI",
+        _ => "Provider CLI",
+    }
+}
+
+fn provider_auth_help(id: &str) -> String {
+    match id {
+        "codex" => "Codex CLI is installed but not authenticated. Run `codex login`, then retry.".into(),
+        "claude" => "Claude Code is installed but not authenticated. Run `claude auth login`, then retry.".into(),
+        "gemini" => "Gemini CLI could not authenticate the headless request. Run `gemini` and complete its supported sign-in flow, then retry.".into(),
+        "grok" => "Grok CLI is installed but not authenticated. Run `grok login`, then retry.".into(),
+        _ => "The provider is not authenticated.".into(),
+    }
+}
+
+fn nested_string(value: &serde_json::Value, paths: &[&[&str]]) -> Option<String> {
+    paths.iter().find_map(|path| {
+        let mut current = value;
+        for key in *path {
+            current = current.get(*key)?;
+        }
+        current.as_str().map(str::to_string)
+    })
+}
+
+fn message_text(value: &serde_json::Value) -> Option<String> {
+    let content = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .or_else(|| value.get("content"))?;
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    let values = content.as_array()?;
+    let text = values
+        .iter()
+        .filter(|block| block.get("type").and_then(|value| value.as_str()) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(|value| value.as_str()))
+        .collect::<Vec<_>>()
+        .join("");
+    (!text.is_empty()).then_some(text)
+}
+
+fn append_stream_text(response: &mut String, provider_id: &str, text: &str) {
+    // Codex emits completed assistant items, so separate distinct items. The
+    // other CLIs emit token/content deltas whose leading spaces are meaningful;
+    // inserting a newline here turns a streamed sentence into one word per line.
+    if provider_id == "codex" && !response.is_empty() && !response.ends_with('\n') {
+        response.push('\n');
+    }
+    response.push_str(text);
+}
+
+pub(crate) fn parse_stream_line(
+    provider_id: &str,
+    line: &str,
+    already_has_content: bool,
+) -> (Option<String>, Option<String>, Option<String>) {
+    if provider_id == "codex" {
+        return parse_codex_line(line);
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return (None, Some(line.to_string()), None);
+    };
+    let event_type = value
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("activity");
+    let session_id = nested_string(
+        &value,
+        &[&["session_id"], &["sessionId"], &["session", "id"]],
+    );
+    let delta = nested_string(
+        &value,
+        &[
+            &["event", "delta", "text"],
+            &["delta", "text"],
+            &["delta", "content"],
+        ],
+    );
+    if matches!(event_type, "stream_event" | "content_block_delta") && delta.is_some() {
+        return (delta, None, session_id);
+    }
+    if provider_id == "gemini" && event_type == "message" {
+        let role = value.get("role").and_then(|value| value.as_str());
+        if role == Some("assistant") {
+            return (
+                value
+                    .get("content")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                None,
+                session_id,
+            );
+        }
+    }
+    if matches!(event_type, "tool_use" | "tool_result") {
+        let name = nested_string(&value, &[&["tool_name"], &["name"], &["tool", "name"]])
+            .unwrap_or_else(|| event_type.replace('_', " "));
+        return (None, Some(name), session_id);
+    }
+    if event_type == "assistant" && !already_has_content {
+        return (message_text(&value), None, session_id);
+    }
+    if matches!(event_type, "result" | "completed") && !already_has_content {
+        return (
+            nested_string(&value, &[&["result"], &["response"], &["text"]]),
+            None,
+            session_id,
+        );
+    }
+    if matches!(event_type, "error" | "failed") {
+        return (
+            None,
+            nested_string(&value, &[&["error", "message"], &["message"]])
+                .or_else(|| Some("Provider reported an error".into())),
+            session_id,
+        );
+    }
+    let activity = match event_type {
+        "system" | "init" | "message_start" => Some(format!(
+            "{} session started",
+            provider_display_name(provider_id)
+        )),
+        "content_block_start" | "content_block_stop" | "message_delta" | "message_stop" => None,
+        _ => None,
+    };
+    (None, activity, session_id)
+}
+
+fn provider_failure_message(
+    provider_id: &str,
+    status: &str,
+    stderr: &str,
+    response: &str,
+) -> String {
     if !response.trim().is_empty() && !stderr.trim().is_empty() {
         format!("{response}\n\nProvider stderr:\n{stderr}")
     } else if !response.trim().is_empty() {
@@ -476,7 +1078,10 @@ fn provider_failure_message(status: &str, stderr: &str, response: &str) -> Strin
     } else if !stderr.trim().is_empty() {
         stderr.to_string()
     } else {
-        format!("Codex exited with status {status}")
+        format!(
+            "{} exited with status {status}",
+            provider_display_name(provider_id)
+        )
     }
 }
 
@@ -497,21 +1102,34 @@ pub fn start_provider_message(
         ));
     }
     let conversation = get_conversation(&state, &conversation_id)?;
-    if conversation.provider != "codex" {
+    if !matches!(
+        conversation.provider.as_str(),
+        "codex" | "claude" | "gemini" | "grok"
+    ) {
         return Err(CommandError::new(
             "provider_unsupported",
-            "This provider adapter is not available yet",
+            "This conversation does not use a supported CLI provider",
         ));
     }
-    let executable = find_executable("codex").ok_or_else(|| {
+    let provider_id = conversation.provider.clone();
+    let executable = find_executable(&provider_id).ok_or_else(|| {
         CommandError::new(
             "provider_unavailable",
-            "Codex CLI was not found. Install and authenticate it, then retry detection.",
+            format!(
+                "{} was not found. Install its CLI, authenticate it, then retry detection.",
+                provider_display_name(&provider_id)
+            ),
         )
     })?;
+    if provider_id != "gemini" && !provider_is_authenticated(&provider_id, &executable) {
+        return Err(CommandError::new(
+            "provider_unauthenticated",
+            provider_auth_help(&provider_id),
+        ));
+    }
     let options = options.unwrap_or_default();
     validate_provider_options(&options)?;
-    let capabilities = provider_capabilities("codex");
+    let capabilities = provider_capabilities(&provider_id);
     if !options.reference_ids.is_empty() && !capabilities.image_input {
         return Err(CommandError::new(
             "provider_image_input_unsupported",
@@ -529,6 +1147,29 @@ pub fn start_provider_message(
         .filter(|value| !value.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
+    let image_provider_id = options.image_provider_id.as_deref().unwrap_or("imagegen");
+    // Chats created before the provider-native option inherited Codex's
+    // `imagegen` setting. Keep those chats usable: non-Codex CLIs can work
+    // directly, while Codex continues to use its existing ImageGen path.
+    let provider_native_image = image_provider_id == "provider-native"
+        || (image_provider_id == "imagegen" && provider_id != "codex");
+    if image_provider_id == "midjourney" {
+        return Err(CommandError::new(
+            "provider_unsupported",
+            "Midjourney does not provide a public API for this integration",
+        ));
+    }
+    let image_provider = if provider_native_image {
+        None
+    } else {
+        load_image_provider(&state, image_provider_id)?
+    };
+    if !provider_native_image && image_provider_id != "imagegen" && image_provider.is_none() {
+        return Err(CommandError::new(
+            "provider_unavailable",
+            "Configure the selected image provider in Settings before generating",
+        ));
+    }
     workspace_path(&state, &conversation.workspace_id)?;
     add_message(
         &state,
@@ -551,6 +1192,7 @@ pub fn start_provider_message(
 
     let task_app = app.clone();
     let task_request_id = request_id.clone();
+    let image_prompt = format!("{prompt}\n\n{combined_context}\n\nCreate one clean, centered, motion-ready game-art source master. Use a plain removable background, clear silhouette, and no text, labels, contact sheet, or multiple poses.");
     let run = ProviderRun {
         request_id: task_request_id,
         conversation_id,
@@ -567,9 +1209,12 @@ pub fn start_provider_message(
         reasoning_effort: options.reasoning_effort,
         reference_paths,
         executable,
+        image_provider,
+        image_prompt,
+        provider_id,
     };
     tauri::async_runtime::spawn(async move {
-        run_codex(task_app, run, cancel_rx).await;
+        run_provider(task_app, run, cancel_rx).await;
     });
     Ok(request_id)
 }
@@ -585,20 +1230,128 @@ struct ProviderRun {
     reasoning_effort: Option<String>,
     reference_paths: Vec<String>,
     executable: PathBuf,
+    image_provider: Option<StoredImageProvider>,
+    image_prompt: String,
+    provider_id: String,
 }
 
-async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Receiver<()>) {
+#[derive(Debug, Deserialize)]
+struct ImageApiResponse {
+    data: Vec<ImageApiItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImageApiItem {
+    #[serde(default)]
+    b64_json: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+async fn generate_external_source(
+    workspace: &Path,
+    provider: &StoredImageProvider,
+    prompt: &str,
+) -> CommandResult<PathBuf> {
+    let endpoint = if provider.base_url.ends_with("/images/generations") {
+        provider.base_url.clone()
+    } else {
+        format!(
+            "{}/images/generations",
+            provider.base_url.trim_end_matches('/')
+        )
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|error| CommandError::new("provider_error", error.to_string()))?;
+    let response = client.post(endpoint)
+        .bearer_auth(&provider.api_key)
+        .json(&serde_json::json!({"model": provider.model, "prompt": prompt, "n": 1, "response_format": "b64_json"}))
+        .send().await.map_err(|error| CommandError::new("provider_error", format!("{} request failed: {error}", provider.name)))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(CommandError::new(
+            "provider_error",
+            format!(
+                "{} returned {status}. Check the endpoint, model ID, API key, and account access.",
+                provider.name
+            ),
+        ));
+    }
+    let result: ImageApiResponse = response.json().await.map_err(|error| {
+        CommandError::new(
+            "provider_error",
+            format!(
+                "{} returned an invalid image response: {error}",
+                provider.name
+            ),
+        )
+    })?;
+    let item = result.data.into_iter().next().ok_or_else(|| {
+        CommandError::new(
+            "provider_error",
+            format!("{} returned no image", provider.name),
+        )
+    })?;
+    let bytes = if let Some(encoded) = item.b64_json {
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| {
+                CommandError::new(
+                    "provider_error",
+                    format!("Could not decode {} image: {error}", provider.name),
+                )
+            })?
+    } else if let Some(url) = item.url {
+        client
+            .get(url)
+            .send()
+            .await
+            .map_err(|error| {
+                CommandError::new(
+                    "provider_error",
+                    format!("Could not download {} image: {error}", provider.name),
+                )
+            })?
+            .error_for_status()
+            .map_err(|error| CommandError::new("provider_error", error.to_string()))?
+            .bytes()
+            .await
+            .map_err(|error| CommandError::new("provider_error", error.to_string()))?
+            .to_vec()
+    } else {
+        return Err(CommandError::new(
+            "provider_error",
+            format!(
+                "{} response contained neither image data nor a URL",
+                provider.name
+            ),
+        ));
+    };
+    let image = image::load_from_memory(&bytes)?;
+    let directory = workspace.join(".sprite-studio/provider-sources");
+    fs::create_dir_all(&directory)?;
+    let output = directory.join(format!("{}-{}.png", provider.id, Uuid::new_v4()));
+    image.save_with_format(&output, image::ImageFormat::Png)?;
+    Ok(output)
+}
+
+async fn run_provider(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Receiver<()>) {
     let ProviderRun {
         request_id,
         conversation_id,
         workspace_id,
         session_id,
         assistant_id,
-        prompt,
+        mut prompt,
         model,
         reasoning_effort,
-        reference_paths,
+        mut reference_paths,
         executable,
+        image_provider,
+        image_prompt,
+        provider_id,
     } = run;
     let state = app.state::<AppState>();
     emit(
@@ -606,7 +1359,10 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
         &request_id,
         &conversation_id,
         "started",
-        "Codex is working in this workspace",
+        format!(
+            "{} is working in this workspace",
+            provider_display_name(&provider_id)
+        ),
     );
     let workspace = match workspace_path(&state, &workspace_id) {
         Ok(path) => path,
@@ -616,6 +1372,56 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
             return;
         }
     };
+    if let Some(provider) = image_provider.as_ref() {
+        emit(
+            &app,
+            &request_id,
+            &conversation_id,
+            "activity",
+            format!("Generating the source master with {}", provider.name),
+        );
+        let generation = generate_external_source(&workspace, provider, &image_prompt);
+        tokio::pin!(generation);
+        let generated = tokio::select! {
+            result = &mut generation => result,
+            _ = &mut cancel_rx => {
+                let _ = update_message(&state, &assistant_id, "Request cancelled", "cancelled");
+                emit(&app, &request_id, &conversation_id, "cancelled", "Request cancelled");
+                state.cancellers.lock().ok().map(|mut values| values.remove(&request_id));
+                return;
+            }
+        };
+        match generated {
+            Ok(path) => {
+                let display = path
+                    .strip_prefix(&workspace)
+                    .unwrap_or(&path)
+                    .to_string_lossy();
+                prompt = format!("EXTERNAL SOURCE MASTER\nA source image was generated by {} and attached at `{display}`. Treat this exact attached file as the context source master. Do not call ImageGen for the initial source pass. Inspect it, normalize it with the bundled PNG tools, and continue through the routed harness.\n\n{prompt}", provider.name);
+                reference_paths.push(path.to_string_lossy().into_owned());
+                emit(
+                    &app,
+                    &request_id,
+                    &conversation_id,
+                    "activity",
+                    format!(
+                        "{} source master saved; starting rig planning",
+                        provider.name
+                    ),
+                );
+            }
+            Err(error) => {
+                let _ = update_message(&state, &assistant_id, &error.message, "failed");
+                emit(&app, &request_id, &conversation_id, "failed", error.message);
+                state
+                    .cancellers
+                    .lock()
+                    .ok()
+                    .map(|mut values| values.remove(&request_id));
+                return;
+            }
+        }
+    }
     if !reference_paths.is_empty() {
         emit(
             &app,
@@ -629,11 +1435,36 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
             ),
         );
     }
-    let arguments = codex_arguments(
+    if provider_id != "codex" && !reference_paths.is_empty() {
+        let paths = reference_paths
+            .iter()
+            .map(|path| format!("- `{path}`"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        prompt.push_str(&format!(
+            "\n\nATTACHED REFERENCE FILES\nInspect these local files before acting:\n{paths}"
+        ));
+    }
+    let prompt_file = if provider_id == "grok" {
+        match create_provider_prompt_file(&workspace, &request_id, &prompt) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                let message = format!("Could not prepare the Grok prompt: {error}");
+                let _ = update_message(&state, &assistant_id, &message, "failed");
+                emit(&app, &request_id, &conversation_id, "failed", message);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let arguments = provider_arguments(
+        &provider_id,
         session_id.as_deref(),
         model.as_deref(),
         reasoning_effort.as_deref(),
         &reference_paths,
+        prompt_file.as_deref(),
     );
     let mut child = match Command::new(executable)
         .args(&arguments)
@@ -647,18 +1478,32 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
     {
         Ok(child) => child,
         Err(error) => {
-            let message = format!("Could not start Codex CLI: {error}");
+            if let Some(path) = prompt_file.as_ref() {
+                let _ = fs::remove_file(path);
+            }
+            let message = format!(
+                "Could not start {}: {error}",
+                provider_display_name(&provider_id)
+            );
             let _ = update_message(&state, &assistant_id, &message, "failed");
             emit(&app, &request_id, &conversation_id, "failed", message);
             return;
         }
     };
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(error) = stdin.write_all(prompt.as_bytes()).await {
-            let message = format!("Could not send the prompt to Codex: {error}");
-            let _ = update_message(&state, &assistant_id, &message, "failed");
-            emit(&app, &request_id, &conversation_id, "failed", message);
-            return;
+    if provider_id != "grok" {
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Err(error) = stdin.write_all(prompt.as_bytes()).await {
+                if let Some(path) = prompt_file.as_ref() {
+                    let _ = fs::remove_file(path);
+                }
+                let message = format!(
+                    "Could not send the prompt to {}: {error}",
+                    provider_display_name(&provider_id)
+                );
+                let _ = update_message(&state, &assistant_id, &message, "failed");
+                emit(&app, &request_id, &conversation_id, "failed", message);
+                return;
+            }
         }
     }
     let stderr = child.stderr.take();
@@ -679,6 +1524,13 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
     let mut cancelled = false;
     if let Some(stdout) = child.stdout.take() {
         let mut lines = BufReader::new(stdout).lines();
+        // Codex can spend several minutes planning or running a tool without
+        // emitting a JSON line. Silence is not evidence that its process is
+        // stuck, so keep the request alive until it exits or the user stops it.
+        // A lightweight heartbeat gives the UI useful feedback in that quiet
+        // period without pretending that work has completed.
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
+        heartbeat.tick().await;
         loop {
             tokio::select! {
                 _ = &mut cancel_rx => {
@@ -686,12 +1538,14 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
                     let _ = child.kill().await;
                     break;
                 }
+                _ = heartbeat.tick() => {
+                    emit(&app, &request_id, &conversation_id, "activity", format!("{} is still working — you can stop this request at any time", provider_display_name(&provider_id)));
+                }
                 line = lines.next_line() => match line {
                     Ok(Some(line)) => {
-                        let (text, activity, session_id) = parse_codex_line(&line);
+                        let (text, activity, session_id) = parse_stream_line(&provider_id, &line, !response.is_empty());
                         if let Some(text) = text {
-                            if !response.is_empty() && !response.ends_with('\n') { response.push('\n'); }
-                            response.push_str(&text);
+                            append_stream_text(&mut response, &provider_id, &text);
                             let _ = update_message(&state, &assistant_id, &response, "running");
                             emit(&app, &request_id, &conversation_id, "content", text);
                         }
@@ -711,6 +1565,9 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
     }
     let status = child.wait().await;
     let stderr_output = stderr_task.await.unwrap_or_default();
+    if let Some(path) = prompt_file.as_ref() {
+        let _ = fs::remove_file(path);
+    }
     state
         .cancellers
         .lock()
@@ -735,21 +1592,322 @@ async fn run_codex(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::Rec
     match status {
         Ok(exit) if exit.success() => {
             if response.trim().is_empty() {
-                response = "Codex completed without returning a text response.".into();
+                response = format!(
+                    "{} completed without returning a text response.",
+                    provider_display_name(&provider_id)
+                );
+            }
+            // A /rig turn (or any reply carrying the rig-suggestion contract)
+            // is captured here so the Rig editor can pick it up immediately.
+            if let Ok(conversation) = get_conversation(&state, &conversation_id) {
+                if let Ok(Some(name)) = crate::rig::capture_chat_suggestion(
+                    &state,
+                    &workspace_id,
+                    conversation.worktree_id.as_deref(),
+                    &response,
+                ) {
+                    emit(
+                        &app,
+                        &request_id,
+                        &conversation_id,
+                        "activity",
+                        format!("{name} captured — open the Rig tab to review and render it"),
+                    );
+                }
             }
             let _ = update_message(&state, &assistant_id, &response, "completed");
             emit(&app, &request_id, &conversation_id, "completed", response);
         }
         Ok(exit) => {
-            let message = provider_failure_message(&exit.to_string(), &stderr_output, &response);
+            let mut message = provider_failure_message(
+                &provider_id,
+                &exit.to_string(),
+                &stderr_output,
+                &response,
+            );
+            let lower = message.to_lowercase();
+            if lower.contains("auth")
+                || lower.contains("login")
+                || lower.contains("credential")
+                || lower.contains("api key")
+            {
+                message = provider_auth_help(&provider_id);
+            }
             let _ = update_message(&state, &assistant_id, &message, "failed");
             emit(&app, &request_id, &conversation_id, "failed", message);
         }
         Err(error) => {
-            let message = format!("Could not observe the Codex process: {error}");
+            let message = format!(
+                "Could not observe the {} process: {error}",
+                provider_display_name(&provider_id)
+            );
             let _ = update_message(&state, &assistant_id, &message, "failed");
             emit(&app, &request_id, &conversation_id, "failed", message);
         }
+    }
+}
+
+pub(crate) fn create_provider_prompt_file(
+    workspace: &Path,
+    request_id: &str,
+    prompt: &str,
+) -> std::io::Result<PathBuf> {
+    let directory = workspace.join(".sprite-studio/provider-prompts");
+    fs::create_dir_all(&directory)?;
+    let path = directory.join(format!("{request_id}.txt"));
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    let mut file = options.open(&path)?;
+    file.write_all(prompt.as_bytes())?;
+    Ok(path)
+}
+
+/// Runs a one-shot headless agent request outside the chat pipeline and
+/// returns the accumulated assistant text. Used for structured asks such as
+/// AI rig-point suggestions, where the caller only needs the final answer.
+pub(crate) async fn run_agent_text_request(
+    provider_id: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    cwd: &Path,
+    prompt: &str,
+    image_paths: &[String],
+) -> CommandResult<String> {
+    if !matches!(provider_id, "codex" | "claude" | "gemini" | "grok") {
+        return Err(CommandError::new(
+            "provider_unsupported",
+            "Choose an installed agent provider for this request",
+        ));
+    }
+    let executable = find_executable(provider_id).ok_or_else(|| {
+        CommandError::new(
+            "provider_unavailable",
+            format!(
+                "{} was not found. Install its CLI, authenticate it, then retry detection.",
+                provider_display_name(provider_id)
+            ),
+        )
+    })?;
+    if provider_id != "gemini" && !provider_is_authenticated(provider_id, &executable) {
+        return Err(CommandError::new(
+            "provider_unauthenticated",
+            provider_auth_help(provider_id),
+        ));
+    }
+    let request_id = Uuid::new_v4().to_string();
+    let prompt_file = if provider_id == "grok" {
+        Some(create_provider_prompt_file(cwd, &request_id, prompt)?)
+    } else {
+        None
+    };
+    let arguments = provider_arguments(
+        provider_id,
+        None,
+        model,
+        reasoning_effort,
+        image_paths,
+        prompt_file.as_deref(),
+    );
+    let mut child = Command::new(&executable)
+        .args(&arguments)
+        .env("PATH", current_provider_environment_path())
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| {
+            CommandError::new(
+                "process_error",
+                format!(
+                    "Could not start {}: {error}",
+                    provider_display_name(provider_id)
+                ),
+            )
+        })?;
+    if provider_id != "grok" {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(prompt.as_bytes()).await.map_err(|error| {
+                CommandError::new(
+                    "process_error",
+                    format!(
+                        "Could not send the prompt to {}: {error}",
+                        provider_display_name(provider_id)
+                    ),
+                )
+            })?;
+        }
+    }
+    let stderr = child.stderr.take();
+    let stderr_task = tauri::async_runtime::spawn(async move {
+        let mut output = String::new();
+        if let Some(stderr) = stderr {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if !output.is_empty() {
+                    output.push('\n');
+                }
+                output.push_str(&line);
+            }
+        }
+        output
+    });
+    let mut response = String::new();
+    let mut read_failed: Option<String> = None;
+    if let Some(stdout) = child.stdout.take() {
+        let mut lines = BufReader::new(stdout).lines();
+        let collect = async {
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        let (text, _, _) = parse_stream_line(provider_id, &line, !response.is_empty());
+                        if let Some(text) = text {
+                            if !response.is_empty() && !response.ends_with('\n') {
+                                response.push('\n');
+                            }
+                            response.push_str(&text);
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        read_failed = Some(error.to_string());
+                        break;
+                    }
+                }
+            }
+        };
+        // A structured ask should answer in one pass; a silent or stuck CLI
+        // must not hold the caller's UI forever.
+        if tokio::time::timeout(Duration::from_secs(300), collect)
+            .await
+            .is_err()
+        {
+            let _ = child.kill().await;
+            if let Some(path) = prompt_file.as_ref() {
+                let _ = fs::remove_file(path);
+            }
+            return Err(CommandError::new(
+                "provider_timeout",
+                format!(
+                    "{} did not answer within five minutes. Try again or use Auto-suggest.",
+                    provider_display_name(provider_id)
+                ),
+            ));
+        }
+    }
+    let status = child.wait().await;
+    let stderr_output = stderr_task.await.unwrap_or_default();
+    if let Some(path) = prompt_file.as_ref() {
+        let _ = fs::remove_file(path);
+    }
+    if let Some(error) = read_failed {
+        return Err(CommandError::new("process_error", error));
+    }
+    let status = status.map_err(|error| {
+        CommandError::new(
+            "process_error",
+            format!(
+                "Could not observe the {} process: {error}",
+                provider_display_name(provider_id)
+            ),
+        )
+    })?;
+    if !status.success() {
+        return Err(CommandError::new(
+            "provider_failed",
+            provider_failure_message(provider_id, &status.to_string(), &stderr_output, &response),
+        ));
+    }
+    if response.trim().is_empty() {
+        return Err(CommandError::new(
+            "provider_empty_response",
+            format!(
+                "{} completed without returning a text response.",
+                provider_display_name(provider_id)
+            ),
+        ));
+    }
+    Ok(response)
+}
+
+pub(crate) fn provider_arguments(
+    provider_id: &str,
+    session_id: Option<&str>,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    reference_paths: &[String],
+    prompt_file: Option<&Path>,
+) -> Vec<String> {
+    match provider_id {
+        "codex" => codex_arguments(session_id, model, reasoning_effort, reference_paths),
+        "claude" => {
+            let mut arguments = vec![
+                "--print".into(),
+                "--input-format".into(),
+                "text".into(),
+                "--output-format".into(),
+                "stream-json".into(),
+                "--include-partial-messages".into(),
+                "--verbose".into(),
+                "--permission-mode".into(),
+                "acceptEdits".into(),
+            ];
+            if let Some(session_id) = session_id {
+                arguments.extend(["--resume".into(), session_id.into()]);
+            }
+            if let Some(model) = model {
+                arguments.extend(["--model".into(), model.into()]);
+            }
+            if let Some(effort) = reasoning_effort {
+                arguments.extend(["--effort".into(), effort.into()]);
+            }
+            arguments
+        }
+        "gemini" => {
+            let mut arguments = vec![
+                "--output-format".into(),
+                "stream-json".into(),
+                "--approval-mode".into(),
+                "auto_edit".into(),
+            ];
+            if let Some(session_id) = session_id {
+                arguments.extend(["--resume".into(), session_id.into()]);
+            }
+            if let Some(model) = model {
+                arguments.extend(["--model".into(), model.into()]);
+            }
+            arguments
+        }
+        "grok" => {
+            let mut arguments = vec![
+                "--output-format".into(),
+                "streaming-messages-json".into(),
+                "--include-partial-messages".into(),
+                "--permission-mode".into(),
+                "acceptEdits".into(),
+            ];
+            if let Some(path) = prompt_file {
+                arguments.extend(["--prompt-file".into(), path.to_string_lossy().into_owned()]);
+            }
+            if let Some(session_id) = session_id {
+                arguments.extend(["--resume".into(), session_id.into()]);
+            }
+            if let Some(model) = model {
+                arguments.extend(["--model".into(), model.into()]);
+            }
+            if let Some(effort) = reasoning_effort {
+                arguments.extend(["--reasoning-effort".into(), effort.into()]);
+            }
+            arguments
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -824,7 +1982,7 @@ fn validate_provider_options(options: &ProviderRequestOptions) -> CommandResult<
     if let Some(command) = options.command.as_deref() {
         if !matches!(
             command,
-            "animate" | "sprite" | "character" | "effect" | "pack"
+            "animate" | "sprite" | "character" | "effect" | "pack" | "rig"
         ) {
             return Err(CommandError::new(
                 "invalid_slash_command",
@@ -844,16 +2002,16 @@ fn validate_generation_options(generation: &GenerationOptions) -> CommandResult<
         "low" | "mid" | "high" | "custom"
     ) || !(8..=512).contains(&generation.width)
         || !(8..=512).contains(&generation.height)
-        || !(1..=32).contains(&generation.frames)
+        || !(1..=64).contains(&generation.frames)
         || !(1..=60).contains(&generation.fps)
         || !matches!(generation.frame_mode.as_str(), "fixed" | "auto")
-        || !(1..=32).contains(&generation.min_frames)
-        || !(1..=32).contains(&generation.max_frames)
+        || !(1..=64).contains(&generation.min_frames)
+        || !(1..=64).contains(&generation.max_frames)
         || generation.min_frames > generation.max_frames
     {
         return Err(CommandError::new(
             "invalid_generation_profile",
-            "Use an 8–512 px canvas, Fixed or Auto frames within 1–32, and 1–60 FPS",
+            "Use an 8–512 px canvas, Fixed or Auto frames within 1–64, and 1–60 FPS",
         ));
     }
     Ok(())
@@ -885,12 +2043,15 @@ pub fn cancel_provider_request(
 #[cfg(test)]
 mod tests {
     use super::{
-        codex_arguments, login_shell_path, login_shell_path_with_timeout, merge_provider_paths,
-        parse_codex_line, provider_environment_path, provider_failure_message,
-        validate_provider_options,
+        append_stream_text, codex_arguments, login_shell_path, login_shell_path_with_timeout,
+        merge_provider_paths, parse_codex_line, parse_stream_line, provider_arguments,
+        provider_environment_path, provider_failure_message, validate_provider_options,
     };
     use crate::models::{GenerationOptions, ProviderRequestOptions};
-    use std::{env, path::PathBuf};
+    use std::{
+        env,
+        path::{Path, PathBuf},
+    };
 
     #[cfg(unix)]
     #[test]
@@ -1149,17 +2310,21 @@ mod tests {
     }
 
     #[test]
-    fn preserves_structured_provider_errors_as_response_content() {
+    fn represents_transient_provider_errors_as_activity() {
         let line = r#"{"type":"error","message":"resume payload is invalid"}"#;
         let (content, activity, _) = parse_codex_line(line);
 
-        assert_eq!(content.as_deref(), Some("resume payload is invalid"));
-        assert!(activity.is_none());
+        assert!(content.is_none());
+        assert_eq!(
+            activity.as_deref(),
+            Some("Connection interrupted; recovering — resume payload is invalid")
+        );
     }
 
     #[test]
     fn nonzero_exit_uses_provider_response_when_stderr_is_empty() {
-        let message = provider_failure_message("exit status: 1", "", "resume payload is invalid");
+        let message =
+            provider_failure_message("codex", "exit status: 1", "", "resume payload is invalid");
 
         assert_eq!(message, "resume payload is invalid");
     }
@@ -1167,6 +2332,7 @@ mod tests {
     #[test]
     fn nonzero_exit_preserves_provider_response_and_stderr() {
         let message = provider_failure_message(
+            "codex",
             "exit status: 1",
             "provider diagnostic context",
             "resume payload is invalid",
@@ -1174,6 +2340,69 @@ mod tests {
 
         assert!(message.contains("resume payload is invalid"));
         assert!(message.contains("provider diagnostic context"));
+    }
+
+    #[test]
+    fn parses_claude_partial_text_and_session() {
+        let line = r#"{"type":"stream_event","session_id":"session-1","event":{"delta":{"text":"hello"}}}"#;
+        let (content, _, session) = parse_stream_line("claude", line, false);
+        assert_eq!(content.as_deref(), Some("hello"));
+        assert_eq!(session.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn streamed_cli_deltas_keep_their_original_spacing() {
+        let mut grok = String::new();
+        append_stream_text(&mut grok, "grok", "Start");
+        append_stream_text(&mut grok, "grok", " by reading");
+        append_stream_text(&mut grok, "grok", " the project.");
+        assert_eq!(grok, "Start by reading the project.");
+
+        let mut codex = String::new();
+        append_stream_text(&mut codex, "codex", "First item.");
+        append_stream_text(&mut codex, "codex", "Second item.");
+        assert_eq!(codex, "First item.\nSecond item.");
+    }
+
+    #[test]
+    fn parses_gemini_assistant_messages() {
+        let line = r#"{"type":"message","role":"assistant","content":"done"}"#;
+        let (content, _, _) = parse_stream_line("gemini", line, false);
+        assert_eq!(content.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn builds_supported_headless_provider_arguments() {
+        let claude = provider_arguments("claude", None, Some("sonnet"), Some("high"), &[], None);
+        assert!(claude
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "stream-json"]));
+        assert!(claude
+            .windows(2)
+            .any(|pair| pair == ["--permission-mode", "acceptEdits"]));
+
+        let gemini = provider_arguments("gemini", Some("session-2"), None, None, &[], None);
+        assert!(gemini
+            .windows(2)
+            .any(|pair| pair == ["--resume", "session-2"]));
+        assert!(gemini
+            .windows(2)
+            .any(|pair| pair == ["--approval-mode", "auto_edit"]));
+
+        let grok = provider_arguments(
+            "grok",
+            None,
+            Some("grok-4.6"),
+            None,
+            &[],
+            Some(Path::new("/tmp/prompt.txt")),
+        );
+        assert!(grok
+            .windows(2)
+            .any(|pair| pair == ["--prompt-file", "/tmp/prompt.txt"]));
+        assert!(grok
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "streaming-messages-json"]));
     }
 
     #[test]
@@ -1238,6 +2467,7 @@ mod tests {
                 allow_auto_adjust: true,
             }),
             reference_ids: Vec::new(),
+            image_provider_id: None,
         };
         assert!(validate_provider_options(&options).is_ok());
         let mut pack_options = options;

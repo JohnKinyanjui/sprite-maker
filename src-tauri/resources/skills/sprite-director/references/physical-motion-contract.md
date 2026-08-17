@@ -40,4 +40,4 @@ Before rendering, reject and revise a proposal when:
 5. the animation's seconds-per-cycle do not match frame count ÷ FPS;
 6. the final-to-first transition implies a teleport, momentum reversal, or impossible contact change.
 
-Include the chosen physical values and any user override in the saved rig metadata or adjacent provenance report and summarize them in the final response. These estimates guide motion; they are not claims of exact biological measurement.
+Include the chosen physical values and any user override in the animation provenance report and summarize them in the final response. These estimates guide motion; they are not claims of exact biological measurement.

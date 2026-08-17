@@ -58,7 +58,7 @@
 </script>
 
 <section class="asset-browser">
-  <header><div><h1>{activePack ? activePack.name : heading}</h1><p>{filtered.length} sprite{filtered.length === 1 ? "" : "s"}{activePack ? " in this pack" : " in workspace"}</p></div><div class="header-actions"><button onclick={refresh} title="Scan workspace files" class:spinning={refreshing}><RefreshCw size={14} /></button><button class="import" onclick={importFile} disabled={importing}><Upload size={13} /> {importing ? "Importing…" : "Import"}</button></div></header>
+  <header><div><h1>{activePack ? activePack.name : heading}</h1><p>{filtered.length} sprite{filtered.length === 1 ? "" : "s"}{activePack ? " in this pack" : " in project"}</p></div><div class="header-actions"><button onclick={refresh} title="Scan project files" class:spinning={refreshing}><RefreshCw size={14} /></button><button class="import" onclick={importFile} disabled={importing}><Upload size={13} /> {importing ? "Importing…" : "Import"}</button></div></header>
   <div class="asset-layout">
     <aside>
       <div class="aside-label">LIBRARY</div>
@@ -69,7 +69,7 @@
       {/each}
       <div class="aside-label import-label">IMPORT TO</div>
       <select bind:value={importCategory}><option value="characters">Characters</option><option value="creatures">Creatures</option><option value="terrain">Terrain</option><option value="props">Props</option><option value="effects">Effects</option></select>
-      <p class="hint">Imported files are copied into your workspace. Existing files are never overwritten.</p>
+      <p class="hint">Imported files are copied into your project. Existing files are never overwritten.</p>
     </aside>
     <div class="content">
       <div class="toolbar"><div class="toolbar-filters"><div class="search"><Search size={13} /><input bind:value={search} placeholder="Filter sprites" /></div><select class="pack-filter" value={packId} onchange={(event)=>onPack?.(event.currentTarget.value)} aria-label="Filter by pack" title={activePack?.name ?? "All packs"}><option value="">All packs</option>{#each packs as pack}<option value={pack.id}>{pack.name}</option>{/each}</select></div><span>Animation frames are grouped into sprite sets</span></div>
@@ -83,7 +83,7 @@
           {/each}
         </div>
       {:else}
-        <div class="empty"><div class="empty-icon">{#if search}<Search size={23} />{:else}<Image size={23} />{/if}</div><h2>{search ? "No matching assets" : "No assets here yet"}</h2><p>{search ? "Try a different search term." : "Import an image or add files to the workspace assets folder."}</p>{#if !search}<button onclick={importFile}><FolderOpen size={13} /> Import first asset</button>{/if}</div>
+        <div class="empty"><div class="empty-icon">{#if search}<Search size={23} />{:else}<Image size={23} />{/if}</div><h2>{search ? "No matching assets" : "No assets here yet"}</h2><p>{search ? "Try a different search term." : "Import an image or add files to the project assets folder."}</p>{#if !search}<button onclick={importFile}><FolderOpen size={13} /> Import first asset</button>{/if}</div>
       {/if}
     </div>
   </div>

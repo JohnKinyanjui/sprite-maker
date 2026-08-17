@@ -21,7 +21,7 @@ const KINDS: [&str; 9] = [
     "ui",
 ];
 
-fn row_to_worktree(row: &rusqlite::Row<'_>) -> rusqlite::Result<Worktree> {
+pub(crate) fn row_to_worktree(row: &rusqlite::Row<'_>) -> rusqlite::Result<Worktree> {
     Ok(Worktree {
         id: row.get(0)?,
         project_id: row.get(1)?,

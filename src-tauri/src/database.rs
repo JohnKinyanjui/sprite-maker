@@ -177,6 +177,11 @@ fn migrate(connection: &mut Connection) -> CommandResult<()> {
         migrate_v11(&transaction)?;
         transaction.commit()?;
     }
+    if version < 12 {
+        let transaction = connection.transaction()?;
+        migrate_v12(&transaction)?;
+        transaction.commit()?;
+    }
     Ok(())
 }
 
@@ -781,6 +786,32 @@ fn migrate_v11(transaction: &Transaction<'_>) -> CommandResult<()> {
     Ok(())
 }
 
+fn migrate_v12(transaction: &Transaction<'_>) -> CommandResult<()> {
+    transaction
+        .execute_batch(
+            r#"
+        CREATE TABLE rigs (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          worktree_id TEXT REFERENCES worktrees(id) ON DELETE SET NULL,
+          asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+          name TEXT NOT NULL,
+          morphology TEXT NOT NULL DEFAULT 'biped',
+          fps REAL NOT NULL DEFAULT 8,
+          looping INTEGER NOT NULL DEFAULT 1,
+          spec_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_rigs_workspace ON rigs(workspace_id, updated_at DESC);
+
+        INSERT INTO migrations(version, applied_at) VALUES (12, datetime('now'));
+        "#,
+        )
+        .map_err(|error| CommandError::new("migration_failed", error.to_string()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,6 +853,7 @@ mod tests {
             "frame_quality_cache",
             "animation_revisions",
             "animation_plan_phases",
+            "rigs",
             "settings",
             "provider_settings",
         ] {
@@ -837,7 +869,7 @@ mod tests {
         let migration_version: i64 = connection
             .query_row("SELECT MAX(version) FROM migrations", [], |row| row.get(0))
             .expect("migration version should be recorded");
-        assert_eq!(migration_version, 11);
+        assert_eq!(migration_version, 12);
 
         let archived_column: i64 = connection
             .query_row(
