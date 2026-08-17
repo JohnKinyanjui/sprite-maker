@@ -199,7 +199,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 bun run tauri build
 ```
 
-Tauri creates the platform-native bundles supported by the build machine. Tagged releases build Windows, Linux, Apple Silicon macOS, and Intel macOS installers in GitHub Actions. This repository contains no Android or iOS targets.
+Tauri creates the platform-native bundles supported by the build machine. Maintainers build, verify, and upload release assets locally instead of spending community funds on multi-platform GitHub Actions builds. This repository contains no Android or iOS targets.
 
 ## Workspace layout
 
@@ -242,7 +242,7 @@ SQLite stores project metadata, conversations, worktrees, asset versions, timeli
 
 ## Project status
 
-Sprite Studio `0.2.3` is an early public release. The core desktop workflow works, but file formats, provider adapters, and generation harnesses will continue to evolve.
+Sprite Studio `0.3.0` is an early public release. The core desktop workflow works, but file formats, provider adapters, and generation harnesses will continue to evolve.
 
 ## Contributing and governance
 
