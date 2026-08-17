@@ -1791,13 +1791,13 @@ fn band_shape(
     }
     let mut runs = Vec::new();
     let mut start: Option<usize> = None;
-    for index in 0..span {
-        if occupied[index] && start.is_none() {
+    for (index, is_occupied) in occupied.iter().copied().enumerate().take(span) {
+        if is_occupied && start.is_none() {
             start = Some(index);
         }
-        if start.is_some() && (!occupied[index] || index + 1 == span) {
+        if start.is_some() && (!is_occupied || index + 1 == span) {
             let begin = start.take().expect("run start");
-            let end = if occupied[index] { index } else { index - 1 };
+            let end = if is_occupied { index } else { index - 1 };
             if end - begin + 1 >= 2 {
                 runs.push((begin, end));
             }
@@ -1886,7 +1886,7 @@ fn shape_features(master: &RgbaImage) -> Option<ShapeFeatures> {
                 let begin = start.take().expect("run start");
                 let end = if span_alpha[index] { index } else { index - 1 };
                 if end - begin + 1 >= 2 {
-                    runs.push((begin as usize + min_x, end as usize + min_x));
+                    runs.push((begin + min_x, end + min_x));
                 }
             }
         }
@@ -2086,7 +2086,8 @@ pub(crate) fn capsule_coverage(master: &RgbaImage, suggestion: &RigSuggestion) -
     for point in &suggestion.points {
         positions.insert(point.name.clone(), (point.x, point.y));
     }
-    let capsules: Vec<((f64, f64), (f64, f64), f64)> = suggestion
+    type Capsule = ((f64, f64), (f64, f64), f64);
+    let capsules: Vec<Capsule> = suggestion
         .bones
         .iter()
         .filter_map(|bone| {
@@ -2266,7 +2267,7 @@ pub fn save_rig(input: RigInput, state: State<'_, AppState>) -> CommandResult<Ri
 }
 
 pub(crate) fn save_rig_inner(input: RigInput, state: &AppState) -> CommandResult<Rig> {
-    let rig = rig_input_to_rig(input, &state)?;
+    let rig = rig_input_to_rig(input, state)?;
     let spec = RigSpec {
         points: rig.points.clone(),
         bones: rig.bones.clone(),
@@ -2507,12 +2508,12 @@ pub(crate) fn render_rig_animation_inner(
         let path_string = path.to_string_lossy().into_owned();
         let registered = assets::inspect(
             &asset.workspace_id,
-            &workspace,
+            workspace,
             &path,
-            existing_asset_id(&state, &path_string)?,
+            existing_asset_id(state, &path_string)?,
         )?;
-        assets::upsert(&state, &registered, "rig-render")?;
-        let relative = path.strip_prefix(&workspace).unwrap_or(&path);
+        assets::upsert(state, &registered, "rig-render")?;
+        let relative = path.strip_prefix(workspace).unwrap_or(&path);
         frame_paths.push(relative.to_string_lossy().into_owned());
         asset_ids.push(registered.id.clone());
         animation_frames.push(AnimationFrame {
@@ -2657,7 +2658,7 @@ mod tests {
     fn snake_master() -> RgbaImage {
         let mut image = RgbaImage::new(64, 14);
         for x in 2..61 {
-            let wave = ((x / 8) % 2) as usize;
+            let wave = (x / 8) % 2;
             rect(&mut image, x, 5 + wave, x + 1, 9 + wave);
         }
         image
@@ -2668,7 +2669,7 @@ mod tests {
         let center = 15.5_f64;
         for y in 0..32usize {
             for x in 0..32usize {
-                let distance = (((x as f64 - center).powi(2) + (y as f64 - center).powi(2))).sqrt();
+                let distance = ((x as f64 - center).powi(2) + (y as f64 - center).powi(2)).sqrt();
                 if distance <= 10.0 {
                     image.put_pixel(x as u32, y as u32, image::Rgba([180, 180, 180, 255]));
                 }
@@ -3048,7 +3049,7 @@ mod tests {
         let rendered = render_frame(&master, &rig, &rig.frames[0], &ownership, &positions);
         // The child tip (8,0) rotates around the parent start (8,8) by -90°
         // (counter-clockwise on screen) to land at (0,8).
-        let child_owner = ownership[0 * 16 + 8];
+        let child_owner = ownership[8];
         assert_eq!(child_owner, 1, "the tip pixel belongs to the child bone");
         let expected = master.get_pixel(8, 0);
         let landed = rendered.get_pixel(0, 8);

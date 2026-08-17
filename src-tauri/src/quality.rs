@@ -447,13 +447,13 @@ fn lower_body_view(image: &RgbaImage, bounds: Option<(u32, u32, u32, u32)>) -> L
     }
     let mut runs: Vec<(usize, usize)> = Vec::new();
     let mut start: Option<usize> = None;
-    for index in 0..width {
-        if occupied[index] && start.is_none() {
+    for (index, is_occupied) in occupied.iter().copied().enumerate().take(width) {
+        if is_occupied && start.is_none() {
             start = Some(index);
         }
-        if start.is_some() && (!occupied[index] || index + 1 == width) {
+        if start.is_some() && (!is_occupied || index + 1 == width) {
             let begin = start.take().expect("run start");
-            let end = if occupied[index] { index } else { index - 1 };
+            let end = if is_occupied { index } else { index - 1 };
             runs.push((begin, end));
         }
     }
@@ -1315,6 +1315,7 @@ fn interpolation_neighbors(
     Some((index - 1, index + 1))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_interpolated_repair(
     app: &tauri::AppHandle,
     state: &AppState,
