@@ -26,6 +26,7 @@
 ### Distribution
 
 - Replaced the paid four-platform GitHub Actions release build with maintainer-built, locally verified release assets uploaded directly to GitHub.
+- Releases now publish native installers and executables directly instead of ZIP wrappers.
 
 ## 0.2.3 — 2026-08-10
 

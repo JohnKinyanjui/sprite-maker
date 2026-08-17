@@ -199,7 +199,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 bun run tauri build
 ```
 
-Tauri creates the platform-native bundles supported by the build machine. Maintainers build, verify, and upload release assets locally instead of spending community funds on multi-platform GitHub Actions builds. This repository contains no Android or iOS targets.
+Tauri creates platform-native installers on the relevant build host. Releases publish the native files directly (macOS `.dmg`, Windows installer or portable `.exe`, and Linux `.deb`/`.rpm`/`.AppImage`) rather than wrapping them in ZIP downloads. Maintainers build, verify, and upload release assets locally instead of spending community funds on multi-platform GitHub Actions builds. This repository contains no Android or iOS targets.
 
 ## Workspace layout
 
