@@ -196,10 +196,20 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ### Build a desktop bundle
 
 ```bash
-bun run tauri build
+make release
 ```
 
-Tauri creates platform-native installers on the relevant build host. Releases publish the native files directly (macOS `.dmg`, Windows installer or portable `.exe`, and Linux `.deb`/`.rpm`/`.AppImage`) rather than wrapping them in ZIP downloads. Maintainers build, verify, and upload release assets locally instead of spending community funds on multi-platform GitHub Actions builds. This repository contains no Android or iOS targets.
+`make release` runs the frontend and Rust tests, builds Tauri locally, and collects the installable files in `release-artifacts/<version>/<platform>`. There is no GitHub Actions release build.
+
+Build each platform on its native machine, then combine the collected folders when publishing a release:
+
+| Host machine | `make release` produces |
+| --- | --- |
+| macOS | `.dmg` and a `.app.tar.gz` archive |
+| Windows | NSIS `.exe` and `.msi` installers |
+| Linux | `.AppImage`, `.deb`, and `.rpm` packages |
+
+Use `make help` to see the available local commands. Tauri creates platform-native installers on the relevant build host; this repository contains no Android or iOS targets.
 
 ## Workspace layout
 
