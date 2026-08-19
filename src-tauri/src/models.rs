@@ -10,6 +10,19 @@ pub struct Workspace {
     pub last_opened_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectBackup {
+    pub format_version: u32,
+    pub project_id: String,
+    pub project_name: String,
+    pub source_path: String,
+    pub backup_path: String,
+    pub created_at: String,
+    pub file_count: u64,
+    pub total_bytes: u64,
+}
+
 /// One-round-trip sidebar payload: every project plus the active project's
 /// worktrees and chats, read under a single database lock.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -407,6 +420,52 @@ pub struct ExportResult {
     pub metadata_path: String,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerrainRuleInput {
+    pub role: String,
+    pub column: u32,
+    pub row: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerrainExportInput {
+    pub project_id: String,
+    pub worktree_id: String,
+    pub asset_id: String,
+    pub name: String,
+    pub tile_width: u32,
+    pub tile_height: u32,
+    pub margin_x: u32,
+    pub margin_y: u32,
+    pub separation_x: u32,
+    pub separation_y: u32,
+    pub include_empty: bool,
+    #[serde(default)]
+    pub terrain_name: Option<String>,
+    #[serde(default)]
+    pub terrain_mode: Option<String>,
+    #[serde(default)]
+    pub terrain_rules: Vec<TerrainRuleInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerrainExportResult {
+    pub directory_path: String,
+    pub texture_path: String,
+    pub resource_path: String,
+    pub columns: u32,
+    pub rows: u32,
+    pub tile_count: u32,
+    pub occupied_tile_count: u32,
+    pub trailing_x: u32,
+    pub trailing_y: u32,
+    pub terrain_rule_count: u32,
+    pub terrain_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import { X, Trash2, FolderMinus, Pencil } from "lucide-svelte";
+  import { Archive, X, Trash2, FolderMinus, Pencil, RotateCcw } from "lucide-svelte";
   import ProjectSidebar from "$lib/components/ProjectSidebar.svelte";
   import ProjectDialog from "$lib/components/ProjectDialog.svelte";
   import MediaNavigation from "$lib/components/MediaNavigation.svelte";
@@ -16,6 +17,7 @@
   import ReferenceLibrary from "$lib/components/ReferenceLibrary.svelte";
   import AnimationEditor from "$lib/components/AnimationEditor.svelte";
   import RigEditor from "$lib/components/RigEditor.svelte";
+  import TerrainStudio from "$lib/components/TerrainStudio.svelte";
   import SpriteSheetStudio from "$lib/components/SpriteSheetStudio.svelte";
   import VfxStudio from "$lib/components/VfxStudio.svelte";
   import TestRoom from "$lib/components/TestRoom.svelte";
@@ -68,6 +70,7 @@
   let worktreeDialog = $state(false);
   let creatingWorktree = $state(false);
   let renameValue = $state("");
+  let backupBusy = $state(false);
   let runningRequests = $state<Record<string,ActiveChatRequest>>({});
   let activityByConversation = $state<Record<string,string[]>>({});
   let toast = $state<{message:string;kind:"error"|"notice"}>();
@@ -92,7 +95,7 @@
   const visibleAssets = $derived(selectedWorktree?.kind === "general" || !selectedWorktree ? assets : assets.filter(asset => worktreeAssetIds.includes(asset.id) || animationAssetIds.has(asset.id)));
   const visiblePacks = $derived(packs.filter(pack => pack.files.some(file => visibleAssets.some(asset => asset.relativePath === file))));
   const spriteCount = $derived(buildSpriteGroups(visibleAssets, animations).length);
-  const mediaTabs=["sprites","references","animate","rig","vfx","sheets","packs","play"];
+  const mediaTabs=["sprites","references","animate","rig","terrain","vfx","sheets","packs","play"];
   const activePrimary=$derived(activeTab==="chat"?"chat":mediaTabs.includes(activeTab)?"media":activeTab);
   function activeWorktreeId(){return selectedWorktree?.kind === "general" ? undefined : selectedWorktree?.id;}
   function generationOptions():ProviderRequestOptions["generation"]{return {quality:generationProfile.quality,width:generationProfile.width,height:generationProfile.height,frames:generationProfile.frames,fps:generationProfile.fps,frameMode:generationProfile.frameMode,minFrames:generationProfile.minFrames,maxFrames:generationProfile.maxFrames,allowInterpolation:generationProfile.allowInterpolation,allowAutoAdjust:generationProfile.allowAutoAdjust};}
@@ -225,17 +228,20 @@
     if(conversationWorktree&&conversationWorktree.id!==selectedWorktree?.id){
       selectedWorktree=conversationWorktree;
       selectedAsset=undefined;
-      const [nextAssetIds,nextAnimations,nextReferences]=await Promise.all([
+      const [nextAssetIds,nextAnimations,nextRigs,nextReferences]=await Promise.all([
         api.listWorktreeAssetIds(conversationWorktree.id),
         api.listAnimations(workspace.id,conversationWorktree.id),
+        api.listRigs(workspace.id,conversationWorktree.id),
         api.listReferenceImages(conversationWorktree.id),
       ]);
       if(selection!==conversationSelection)return;
       worktreeAssetIds=nextAssetIds;
       animations=nextAnimations;
+      rigs=nextRigs;
       references=nextReferences;
       conversations=chatsForWorktree(sidebarConversations,conversationWorktree);
       selectedAnimation=nextAnimations[0];
+      selectedRigId=nextRigs[0]?.id;
       await api.setSetting(`active-worktree:${workspace.id}`,conversationWorktree.id);
     }
     const [nextMessages,nextStyle,nextProfile,nextReferenceIds]=await Promise.all([
@@ -253,6 +259,8 @@
   }
   async function renameChat(conversation:Conversation,title:string){try{await api.renameConversation(conversation.id,title);const renamed={...conversation,title};sidebarConversations=sidebarConversations.map(item=>item.id===conversation.id?renamed:item);conversations=conversations.map(item=>item.id===conversation.id?renamed:item);if(selectedConversation?.id===conversation.id)selectedConversation={...selectedConversation,title};notify("Chat renamed");}catch(error){notify(errorMessage(error),"error");throw error;}}
   async function archiveChat(conversation:Conversation){if(runningRequests[conversation.id]){notify("Stop this chat’s generation before archiving it","error");return;}try{await api.archiveConversation(conversation.id);sidebarConversations=sidebarConversations.filter(item=>item.id!==conversation.id);conversations=conversations.filter(item=>item.id!==conversation.id);if(selectedConversation?.id===conversation.id){const next=conversations[0];if(next)await chooseConversation(next);else await newConversation(selectedWorktree);}notify("Chat archived");}catch(error){notify(errorMessage(error),"error");}}
+  async function listArchivedChats(){if(!workspace)return [];try{return await api.listArchivedConversations(workspace.id);}catch(error){notify(errorMessage(error),"error");return [];}}
+  async function restoreArchivedChat(conversation:Conversation){try{const restored=await api.restoreConversation(conversation.id);sidebarConversations=[restored,...sidebarConversations.filter(item=>item.id!==restored.id)];conversations=chatsForWorktree(sidebarConversations,selectedWorktree);await chooseConversation(restored);notify("Chat restored");}catch(error){notify(errorMessage(error),"error");throw error;}}
   function providerFor(conversation:Conversation){return providers.find(provider=>provider.id===conversation.provider);}
   async function loadGenerationProfile(conversation:Conversation){return normalizeGenerationProfile(await api.getSetting(`conversation-generation:${conversation.id}`),providerFor(conversation)?.modes??[]);}
   function composerReferenceCategory():ReferenceCategory{return selectedWorktree?.kind==="vfx"?"vfx":"other";}
@@ -537,13 +545,32 @@
   async function testImageProvider(input:ImageProviderInput){try{return await api.testImageProvider(input);}catch(error){const message=errorMessage(error);notify(message,"error");throw new Error(message);}}
   async function renameWorkspace(){if(!workspace||!renameValue.trim())return;try{await api.renameWorkspace(workspace.id,renameValue);workspace={...workspace,name:renameValue.trim()};workspaceMenu=false;await loadWorkspaces();notify("Project renamed");}catch(error){notify(errorMessage(error),"error");}}
   async function removeWorkspace(deleteFiles:boolean){if(!workspace)return;const question=deleteFiles?`Permanently delete ${workspace.name} and every file in its folder?`:`Remove ${workspace.name} from Sprite Studio? Its files will stay on disk.`;if(!window.confirm(question))return;try{if(deleteFiles)await api.deleteWorkspace(workspace.id);else await api.removeWorkspace(workspace.id);workspaceMenu=false;await goHome();notify(deleteFiles?"Project files deleted":"Project removed from the app");}catch(error){notify(errorMessage(error),"error");}}
+  async function createBackup(){
+    if(!workspace)return;
+    const destination=await open({directory:true,multiple:false,title:"Choose backup destination"});
+    if(typeof destination!=="string")return;
+    backupBusy=true;
+    try{const backup=await api.createProjectBackup(workspace.id,destination);notify(`Backup created with ${backup.fileCount} files`);await revealItemInDir(backup.backupPath);}
+    catch(error){notify(errorMessage(error),"error");}
+    finally{backupBusy=false;}
+  }
+  async function restoreBackup(){
+    if(!workspace)return;
+    const backupPath=await open({directory:true,multiple:false,title:"Choose a Sprite Studio backup"});
+    if(typeof backupPath!=="string")return;
+    if(!window.confirm(`Restore ${workspace.name} from this backup? Current files and project data will be replaced after Sprite Studio creates a safety backup.`))return;
+    backupBusy=true;
+    try{const restored=await api.restoreProjectBackup(workspace.id,backupPath);workspaceMenu=false;await loadWorkspace(restored);notify("Project restored; a safety backup of the previous state was kept beside the project");}
+    catch(error){notify(errorMessage(error),"error");}
+    finally{backupBusy=false;}
+  }
 
   onMount(()=>{
     initialLoad();
     const shortcuts=(event:KeyboardEvent)=>{
       if(!(event.metaKey||event.ctrlKey)||event.altKey||event.shiftKey)return;
       if(event.key.toLowerCase()==="n"){event.preventDefault();void newConversation();return;}
-      const order=selectedWorktree?.kind==="vfx"?["chat","sprites","references","animate","rig","vfx","sheets","packs","play"]:["chat","sprites","references","animate","rig","sheets","packs","play"];
+      const order=selectedWorktree?.kind==="vfx"?["chat","sprites","references","animate","rig","vfx","sheets","packs","play"]:selectedWorktree?.kind==="tileset"?["chat","sprites","references","animate","rig","terrain","sheets","packs","play"]:["chat","sprites","references","animate","rig","sheets","packs","play"];
       const tab=order[Number(event.key)-1];
       if(tab){event.preventDefault();activeTab=tab;}
     };
@@ -578,7 +605,7 @@
   <div class="boot"><div class="boot-mark"><LogoMark size={27}/></div><span></span><p>Opening Sprite Studio</p></div>
 {:else}
   <main class="studio">
-    <ProjectSidebar {workspaces} {workspace} {worktrees} conversations={sidebarConversations} selectedWorktreeId={selectedWorktree?.id} selectedConversationId={selectedConversation?.id} {runningConversationIds} activeView={activePrimary} onView={selectPrimary} onProject={loadWorkspace} onAddProject={()=>projectDialogOpen=true} onConversation={chooseConversation} onNewConversation={newConversation} onRenameConversation={renameChat} onArchiveConversation={archiveChat} onSettings={()=>settingsOpen=true} onManageProject={()=>{if(workspace){renameValue=workspace.name;workspaceMenu=true;}}}/>
+    <ProjectSidebar {workspaces} {workspace} {worktrees} conversations={sidebarConversations} selectedWorktreeId={selectedWorktree?.id} selectedConversationId={selectedConversation?.id} {runningConversationIds} activeView={activePrimary} onView={selectPrimary} onProject={loadWorkspace} onAddProject={()=>projectDialogOpen=true} onConversation={chooseConversation} onNewConversation={newConversation} onRenameConversation={renameChat} onArchiveConversation={archiveChat} onListArchivedConversations={listArchivedChats} onRestoreConversation={restoreArchivedChat} onSettings={()=>settingsOpen=true} onManageProject={()=>{if(workspace){renameValue=workspace.name;workspaceMenu=true;}}}/>
     <section class="main-pane">
       <div class="tab-stack">
         {#if activeTab==="skills"}<SkillsLibrary skills={customSkills} onChange={saveCustomSkills}/>
@@ -587,11 +614,12 @@
         {:else if activeTab==="chat"}
           {#key selectedConversation?.id}<ConversationView conversation={selectedConversation} {messages} provider={currentProvider} availableProviders={providers} {imageProviders} customStyles={customArts} runningRequestId={currentRequest?.id} activity={currentActivity} {selectedAsset} {assets} {animations} packs={visiblePacks} {references} {activeReferenceIds} {focusedReferenceId} draftPrompt={chatDraft} onDraftConsumed={()=>chatDraft=""} workspacePath={workspace.path} {workspaceStyle} {conversationStyle} {generationProfile} onSend={send} onCancel={cancel} onClearAsset={()=>selectedAsset=undefined} onEditAsset={editAssetFromChat} onEditAnimation={editAnimationFromChat} onViewPack={openPackFromChat} onExportAsset={exportAssetFromChat} onExportAnimation={exportAnimationFromChat} onConversationStyle={changeConversationStyle} onGenerationProfile={changeGenerationProfile} onProviderSwitch={changeConversationProvider} onAttachReferencePaths={attachReferencePaths} onAttachReferenceFiles={attachReferenceFiles} onFocusReference={focusConversationReference} onRemoveReference={removeConversationReference} onLinkError={(message)=>notify(message,"error")}/>{/key}
         {:else}
-          <div class="media-view"><MediaNavigation active={activeTab} showVfx={selectedWorktree?.kind==="vfx"} counts={{sprites:spriteCount,references:references.length,animate:animations.length,rigs:rigs.length,packs:visiblePacks.length}} onSelect={selectTab}/><div class="media-content">
+          <div class="media-view"><MediaNavigation active={activeTab} showVfx={selectedWorktree?.kind==="vfx"} showTerrain={selectedWorktree?.kind==="tileset"} counts={{sprites:spriteCount,references:references.length,animate:animations.length,rigs:rigs.length,packs:visiblePacks.length}} onSelect={selectTab}/><div class="media-content">
             {#if activeTab==="sprites"}<AssetBrowser workspaceId={workspace.id} worktreeId={selectedWorktree?.id} assets={visibleAssets} {animations} packs={visiblePacks} packId={packFilter} selectedAssetId={selectedAsset?.id} onAssets={(value)=>assets=value} onSelect={selectAsset} onOpen={openSpriteGroup} onPack={(value)=>packFilter=value} onLinked={async()=>{if(selectedWorktree)worktreeAssetIds=await api.listWorktreeAssetIds(selectedWorktree.id)}} onError={(message)=>notify(message,"error")}/>
             {:else if activeTab==="references"&&selectedWorktree}<ReferenceLibrary worktreeId={selectedWorktree.id} conversationId={selectedConversation?.id} {references} activeIds={activeReferenceIds} maximumActive={currentProvider?.capabilities.maximumReferenceImages ?? 0} onReferences={(value)=>references=value} onActiveIds={(value)=>activeReferenceIds=value} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
             {:else if activeTab==="animate"}<AnimationEditor workspaceId={workspace.id} worktreeId={activeWorktreeId()} assets={visibleAssets} {animations} templates={animationTemplates} {selectedAnimation} active onAnimations={(value)=>animations=value} onTemplates={(value)=>animationTemplates=value} onSelected={(value)=>selectedAnimation=value} onTemplateApplication={prepareTemplateInChat} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
             {:else if activeTab==="rig"}<RigEditor workspaceId={workspace.id} worktreeId={activeWorktreeId()} assets={assets} {rigs} {providers} {selectedRigId} initialAssetId={rigDraftAssetId} onRigs={(value)=>rigs=value} onSelected={(id)=>{selectedRigId=id;rigDraftAssetId=undefined;}} onRendered={rigRendered} onPolish={prepareRigPolishInChat} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
+            {:else if activeTab==="terrain"&&selectedWorktree?.kind==="tileset"}<TerrainStudio workspaceId={workspace.id} worktreeId={selectedWorktree.id} assets={visibleAssets} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
             {:else if activeTab==="vfx"&&selectedWorktree?.kind==="vfx"}<VfxStudio workspaceId={workspace.id} worktreeId={selectedWorktree.id} {animations} assets={visibleAssets} active onCreated={refreshVfxAssets} onOpenSheets={openVfxSheet} onGenerate={generateVfxFromStudio} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
             {:else if activeTab==="sheets"}<SpriteSheetStudio workspaceId={workspace.id} worktreeId={activeWorktreeId()} {animations} assets={visibleAssets} active onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
             {:else if activeTab==="packs"}<PackLibrary packs={visiblePacks} assets={visibleAssets} {selectedPackId} onView={viewPack} onBack={()=>selectedPackId=""} onOpen={openPackAsset}/>
@@ -609,7 +637,7 @@
 {#if worktreeDialog}<WorktreeDialog busy={creatingWorktree} onCreate={createWorktree} onClose={()=>worktreeDialog=false}/>{/if}
 {#if viewedAsset}<SpriteViewer asset={viewedAsset} onAnimate={animateViewedAsset} onDownload={exportAssetFromChat} onClose={()=>viewedAsset=undefined}/>{/if}
 {#if motionAsset}<MotionPromptDialog asset={motionAsset} onContinue={(motion,polishMode)=>prepareMotionInChat(motionAsset!,motion,polishMode)} onRig={()=>rigAsset(motionAsset!)} onClose={()=>motionAsset=undefined}/>{/if}
-{#if workspaceMenu && workspace}<div class="backdrop" role="presentation" onclick={(event)=>event.target===event.currentTarget&&(workspaceMenu=false)}><div class="workspace-dialog"><header><div><p>PROJECT</p><h2>Manage {workspace.name}</h2></div><button onclick={()=>workspaceMenu=false}><X size={15}/></button></header><label>Name<div><input bind:value={renameValue}/><button onclick={renameWorkspace}><Pencil size={12}/>Rename</button></div></label><p class="path">{workspace.path}</p><div class="danger-actions"><button onclick={()=>removeWorkspace(false)}><FolderMinus size={13}/>Remove from app</button><button onclick={()=>removeWorkspace(true)}><Trash2 size={13}/>Delete files…</button></div></div></div>{/if}
+{#if workspaceMenu && workspace}<div class="backdrop" role="presentation" onclick={(event)=>event.target===event.currentTarget&&(workspaceMenu=false)}><div class="workspace-dialog"><header><div><p>PROJECT</p><h2>Manage {workspace.name}</h2></div><button onclick={()=>workspaceMenu=false}><X size={15}/></button></header><label>Name<div><input bind:value={renameValue}/><button onclick={renameWorkspace}><Pencil size={12}/>Rename</button></div></label><p class="path">{workspace.path}</p><div class="backup-actions"><button onclick={createBackup} disabled={backupBusy}><Archive size={13}/>{backupBusy?"Working…":"Create backup…"}</button><button onclick={restoreBackup} disabled={backupBusy}><RotateCcw size={13}/>Restore backup…</button></div><div class="danger-actions"><button onclick={()=>removeWorkspace(false)}><FolderMinus size={13}/>Remove from app</button><button onclick={()=>removeWorkspace(true)}><Trash2 size={13}/>Delete files…</button></div></div></div>{/if}
 {#if toast}<div class="toast" class:error={toast.kind==="error"}><span></span><p>{toast.message}</p><button onclick={()=>toast=undefined}><X size={12}/></button></div>{/if}
 
 <style>
@@ -620,5 +648,5 @@
   .studio{width:100vw;height:100vh;display:flex;background:var(--bg);color:var(--text)}.main-pane{flex:1;min-width:0;height:100%;position:relative}.tab-stack{position:absolute;inset:0;overflow:hidden}.media-view{height:100%;display:grid;grid-template-rows:58px minmax(0,1fr)}.media-content{min-height:0;position:relative}.media-content>:global(*){max-width:100%}
   .boot{width:100vw;height:100vh;background:#090a0a;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#707174}.boot-mark{--logo-pixel:#f4f4f5;width:46px;height:46px;border:1px solid #3b3c3d;border-radius:10px;display:grid;place-items:center;color:#f5a524;background:#171818}.boot>span{width:90px;height:1px;background:#282929;position:relative;margin-top:22px;overflow:hidden}.boot>span:after{content:"";position:absolute;width:35px;height:1px;background:#8b5cf6;animation:load 1.2s ease-in-out infinite}.boot p{font-size:12px;letter-spacing:.06em;margin-top:13px}@keyframes load{from{left:-35px}to{left:90px}}
   .toast{position:fixed;right:16px;bottom:16px;z-index:70;min-width:260px;max-width:420px;min-height:40px;background:var(--surface);border:1px solid var(--border-strong);box-shadow:0 12px 34px #0006;border-radius:6px;display:grid;grid-template-columns:7px minmax(0,1fr) 24px;align-items:center;padding:0 7px}.toast>span{width:6px;height:6px;border-radius:50%;background:#5cad7b}.toast.error>span{background:#d16f69}.toast p{font-size:12px;line-height:1.4;margin:10px 8px;color:var(--text)}.toast button{border:0;background:transparent;color:var(--faint);display:grid;place-items:center;cursor:pointer}
-  .backdrop{position:fixed;inset:0;background:#0009;display:grid;place-items:center;z-index:45}.workspace-dialog{width:min(430px,calc(100vw - 30px));background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;box-shadow:0 24px 70px #0009;padding:20px}.workspace-dialog header{display:flex;align-items:flex-start;justify-content:space-between}.workspace-dialog header p{font-size:10px;letter-spacing:.14em;color:var(--faint);font-weight:700;margin:0 0 7px}.workspace-dialog h2{font-size:16px;margin:0}.workspace-dialog header button{border:0;background:transparent;color:var(--faint);width:26px;height:26px;display:grid;place-items:center;cursor:pointer}.workspace-dialog label{font-size:11px;color:var(--muted);display:block;margin-top:24px}.workspace-dialog label>div{display:flex;gap:6px;margin-top:7px}.workspace-dialog input{height:31px;min-width:0;flex:1;background:var(--bg);border:1px solid var(--border-strong);border-radius:4px;color:var(--text);padding:0 8px;font-size:12px;outline:0}.workspace-dialog label button,.danger-actions button{height:31px;border:1px solid var(--border);background:var(--bg);color:var(--muted);border-radius:4px;display:flex;align-items:center;gap:6px;padding:0 9px;font:inherit;font-size:11px;cursor:pointer}.workspace-dialog .path{font-size:10px;color:var(--faint);overflow-wrap:anywhere;margin:10px 0 23px}.danger-actions{border-top:1px solid var(--border);padding-top:15px;display:flex;justify-content:space-between}.danger-actions button:last-child{color:#cf7772}
+  .backdrop{position:fixed;inset:0;background:#0009;display:grid;place-items:center;z-index:45}.workspace-dialog{width:min(430px,calc(100vw - 30px));background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;box-shadow:0 24px 70px #0009;padding:20px}.workspace-dialog header{display:flex;align-items:flex-start;justify-content:space-between}.workspace-dialog header p{font-size:10px;letter-spacing:.14em;color:var(--faint);font-weight:700;margin:0 0 7px}.workspace-dialog h2{font-size:16px;margin:0}.workspace-dialog header button{border:0;background:transparent;color:var(--faint);width:26px;height:26px;display:grid;place-items:center;cursor:pointer}.workspace-dialog label{font-size:11px;color:var(--muted);display:block;margin-top:24px}.workspace-dialog label>div{display:flex;gap:6px;margin-top:7px}.workspace-dialog input{height:31px;min-width:0;flex:1;background:var(--bg);border:1px solid var(--border-strong);border-radius:4px;color:var(--text);padding:0 8px;font-size:12px;outline:0}.workspace-dialog label button,.backup-actions button,.danger-actions button{height:31px;border:1px solid var(--border);background:var(--bg);color:var(--muted);border-radius:4px;display:flex;align-items:center;gap:6px;padding:0 9px;font:inherit;font-size:11px;cursor:pointer}.workspace-dialog .path{font-size:10px;color:var(--faint);overflow-wrap:anywhere;margin:10px 0 16px}.backup-actions{display:flex;gap:7px;padding-bottom:15px}.backup-actions button{flex:1;justify-content:center}.backup-actions button:disabled{opacity:.5;cursor:not-allowed}.danger-actions{border-top:1px solid var(--border);padding-top:15px;display:flex;justify-content:space-between}.danger-actions button:last-child{color:#cf7772}
 </style>

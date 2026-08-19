@@ -1,5 +1,6 @@
 mod animations;
 mod assets;
+mod backups;
 mod conversations;
 mod database;
 mod error;
@@ -14,6 +15,7 @@ mod rig;
 mod settings;
 mod sprite_harness;
 mod templates;
+mod terrain;
 mod workspace;
 mod worktrees;
 
@@ -50,6 +52,9 @@ pub fn run() {
             workspace::rename_workspace,
             workspace::remove_workspace,
             workspace::delete_workspace,
+            backups::create_project_backup,
+            backups::restore_project_backup,
+            backups::import_project_backup,
             worktrees::list_worktrees,
             worktrees::create_worktree,
             worktrees::update_worktree,
@@ -57,10 +62,12 @@ pub fn run() {
             worktrees::list_worktree_asset_ids,
             worktrees::link_asset_to_worktree,
             conversations::list_conversations,
+            conversations::list_archived_conversations,
             conversations::create_conversation,
             conversations::rename_conversation,
             conversations::switch_conversation_provider,
             conversations::archive_conversation,
+            conversations::restore_conversation,
             conversations::delete_conversation,
             conversations::list_messages,
             conversations::update_message_metadata,
@@ -88,6 +95,7 @@ pub fn run() {
             assets::rename_asset,
             assets::delete_asset,
             assets::export_asset,
+            terrain::export_godot_tileset,
             assets::get_generation_manifest,
             assets::scan_generation_assets,
             assets::list_asset_versions,

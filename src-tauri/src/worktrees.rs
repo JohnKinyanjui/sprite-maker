@@ -5,7 +5,7 @@ use crate::{
     AppState,
 };
 use chrono::Utc;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
 use uuid::Uuid;
 
@@ -205,20 +205,15 @@ pub fn update_worktree(
         .map_err(CommandError::from)
 }
 
-#[tauri::command]
-pub fn delete_worktree(id: String, state: State<'_, AppState>) -> CommandResult<()> {
-    let connection = state
-        .db
-        .lock()
-        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+fn delete_worktree_record(connection: &mut Connection, id: &str) -> CommandResult<()> {
     let worktree: Option<(String, String)> = connection
         .query_row(
             "SELECT project_id, kind FROM worktrees WHERE id = ?1",
-            [&id],
+            [id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let Some((_project_id, kind)) = worktree else {
+    let Some((project_id, kind)) = worktree else {
         return Err(CommandError::new(
             "worktree_not_found",
             "Worktree no longer exists",
@@ -230,8 +225,62 @@ pub fn delete_worktree(id: String, state: State<'_, AppState>) -> CommandResult<
             "The General worktree preserves project-level and migrated content",
         ));
     }
-    connection.execute("DELETE FROM worktrees WHERE id = ?1", [id])?;
+    let general_id: String = connection
+        .query_row(
+            "SELECT id FROM worktrees WHERE project_id = ?1 AND kind = 'general' ORDER BY created_at LIMIT 1",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| CommandError::new(
+            "general_worktree_missing",
+            "The project General worktree is missing; reopen the project and try again",
+        ))?;
+    let running: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM conversations c JOIN messages m ON m.conversation_id = c.id WHERE c.worktree_id = ?1 AND m.status = 'running')",
+        [id],
+        |row| row.get(0),
+    )?;
+    if running {
+        return Err(CommandError::new(
+            "worktree_busy",
+            "Stop active chat generation before deleting this worktree",
+        ));
+    }
+
+    let transaction = connection.transaction()?;
+    transaction.execute(
+        "INSERT OR IGNORE INTO asset_worktrees(asset_id, worktree_id, relationship, created_at) SELECT asset_id, ?1, relationship, created_at FROM asset_worktrees WHERE worktree_id = ?2",
+        params![general_id, id],
+    )?;
+    for table in [
+        "conversations",
+        "generations",
+        "animations",
+        "reference_images",
+        "background_jobs",
+        "sprite_sheets",
+        "vfx_effects",
+        "quality_reports",
+        "rigs",
+    ] {
+        transaction.execute(
+            &format!("UPDATE {table} SET worktree_id = ?1 WHERE worktree_id = ?2"),
+            params![general_id, id],
+        )?;
+    }
+    transaction.execute("DELETE FROM asset_worktrees WHERE worktree_id = ?1", [id])?;
+    transaction.execute("DELETE FROM worktrees WHERE id = ?1", [id])?;
+    transaction.commit()?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn delete_worktree(id: String, state: State<'_, AppState>) -> CommandResult<()> {
+    let mut connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    delete_worktree_record(&mut connection, &id)
 }
 
 #[tauri::command]
@@ -288,7 +337,9 @@ pub fn link_asset_to_worktree(
 
 #[cfg(test)]
 mod tests {
-    use super::{slug, validate_kind};
+    use super::{delete_worktree_record, slug, validate_kind};
+    use crate::database;
+    use rusqlite::params;
 
     #[test]
     fn validates_explicit_worktree_types() {
@@ -312,5 +363,89 @@ mod tests {
     fn creates_portable_worktree_slugs() {
         assert_eq!(slug("Knight / One-Handed"), "knight-one-handed");
         assert_eq!(slug("  Fire   Magic  "), "fire-magic");
+    }
+
+    #[test]
+    fn deleting_a_worktree_moves_content_and_rigs_to_general() {
+        let path = std::env::temp_dir().join(format!(
+            "sprite-studio-worktree-delete-{}.sqlite3",
+            uuid::Uuid::new_v4()
+        ));
+        let mut connection = database::open(&path).expect("database should open");
+        connection.execute(
+            "INSERT INTO projects(id, name, path, created_at, last_opened_at) VALUES ('p1','Test','test','now','now')",
+            [],
+        ).expect("project should insert");
+        for (id, name, slug, kind) in [
+            ("general", "General", "general", "general"),
+            ("terrain", "Terrain", "terrain", "tileset"),
+        ] {
+            connection.execute(
+                "INSERT INTO worktrees(id, project_id, name, slug, kind, created_at, updated_at) VALUES (?1,'p1',?2,?3,?4,'now','now')",
+                params![id, name, slug, kind],
+            ).expect("worktree should insert");
+        }
+        connection.execute(
+            "INSERT INTO conversations(id, workspace_id, worktree_id, title, provider, created_at, updated_at) VALUES ('c1','p1','terrain','Chat','codex','now','now')",
+            [],
+        ).expect("conversation should insert");
+        connection.execute(
+            "INSERT INTO messages(id, conversation_id, role, content, status, created_at) VALUES ('m1','c1','user','hello','completed','now')",
+            [],
+        ).expect("message should insert");
+        connection.execute(
+            "INSERT INTO assets(id, workspace_id, name, path, relative_path, category, format, width, height, file_size, created_at) VALUES ('a1','p1','Tile','tile.png','assets/terrain/tile.png','terrain','png',1,1,1,'now')",
+            [],
+        ).expect("asset should insert");
+        connection.execute(
+            "INSERT INTO asset_worktrees(asset_id, worktree_id, relationship, created_at) VALUES ('a1','terrain','owned','now')",
+            [],
+        ).expect("asset link should insert");
+        connection.execute(
+            "INSERT INTO rigs(id, workspace_id, worktree_id, asset_id, name, spec_json, created_at, updated_at) VALUES ('r1','p1','terrain','a1','Tile rig','{}','now','now')",
+            [],
+        ).expect("rig should insert");
+
+        delete_worktree_record(&mut connection, "terrain").expect("delete should succeed");
+
+        let chat_worktree: String = connection
+            .query_row(
+                "SELECT worktree_id FROM conversations WHERE id='c1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("conversation should remain");
+        let rig_worktree: String = connection
+            .query_row("SELECT worktree_id FROM rigs WHERE id='r1'", [], |row| {
+                row.get(0)
+            })
+            .expect("rig should remain");
+        assert_eq!(chat_worktree, "general");
+        assert_eq!(rig_worktree, "general");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id='c1'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("message count should work"),
+            1
+        );
+        assert_eq!(connection.query_row(
+            "SELECT COUNT(*) FROM asset_worktrees WHERE asset_id='a1' AND worktree_id='general'", [], |row| row.get::<_, i64>(0),
+        ).expect("asset link count should work"), 1);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM worktrees WHERE id='terrain'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("worktree count should work"),
+            0
+        );
+        drop(connection);
+        let _ = std::fs::remove_file(path);
     }
 }

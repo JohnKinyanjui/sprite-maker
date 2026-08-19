@@ -1,4 +1,5 @@
 export type Workspace = { id: string; name: string; path: string; createdAt: string; lastOpenedAt: string };
+export type ProjectBackup = { formatVersion: number; projectId: string; projectName: string; sourcePath: string; backupPath: string; createdAt: string; fileCount: number; totalBytes: number };
 export type SidebarSnapshot = { workspaces: Workspace[]; worktrees: Worktree[]; conversations: Conversation[] };
 export type WorktreeKind = "general" | "character" | "environment" | "creature" | "object" | "tileset" | "animation" | "vfx" | "ui";
 export type Worktree = { id: string; projectId: string; name: string; slug: string; kind: WorktreeKind; description?: string; createdAt: string; updatedAt: string };
@@ -33,6 +34,11 @@ export type AnimationPolishMode = "rig" | "ai-polish" | "full-redraw";
 export type SpriteGenerationMetadata = { kind: "sprite-generation"; name: string; category: string; fps: number; assetIds: string[]; animationId?: string };
 export type PackGenerationMetadata = { kind: "pack-generation"; packId: string };
 export type ExportResult = { pngPath: string; metadataPath: string; width: number; height: number };
+export type TerrainRuleRole = "top_left" | "top" | "top_right" | "left" | "center" | "right" | "bottom_left" | "bottom" | "bottom_right";
+export type TerrainRuleMode = "nine_slice" | "blob_47";
+export type TerrainRuleInput = { role: TerrainRuleRole | `blob_${number}`; column: number; row: number };
+export type TerrainExportInput = { projectId: string; worktreeId: string; assetId: string; name: string; tileWidth: number; tileHeight: number; marginX: number; marginY: number; separationX: number; separationY: number; includeEmpty: boolean; terrainName?: string; terrainMode?: TerrainRuleMode; terrainRules?: TerrainRuleInput[] };
+export type TerrainExportResult = { directoryPath: string; texturePath: string; resourcePath: string; columns: number; rows: number; tileCount: number; occupiedTileCount: number; trailingX: number; trailingY: number; terrainRuleCount: number; terrainMode: "plain" | TerrainRuleMode };
 export type JobStatus = "queued" | "running" | "analyzing" | "completed" | "failed" | "cancelled";
 export type BackgroundJob = { id: string; projectId: string; worktreeId?: string; kind: string; targetType?: string; targetId?: string; status: JobStatus; progress: number; stage: string; errorMessage?: string; cancelRequested: boolean; resultPath?: string; createdAt: string; startedAt?: string; completedAt?: string; updatedAt: string };
 export type JobEvent = { job: BackgroundJob };

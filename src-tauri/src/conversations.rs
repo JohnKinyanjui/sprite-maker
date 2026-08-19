@@ -65,6 +65,25 @@ pub fn list_conversations(
 }
 
 #[tauri::command]
+pub fn list_archived_conversations(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<Conversation>> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    let mut statement = connection.prepare(
+        "SELECT id, workspace_id, worktree_id, title, provider, provider_session_id, created_at, updated_at, archived_at
+         FROM conversations
+         WHERE workspace_id=?1 AND archived_at IS NOT NULL
+         ORDER BY archived_at DESC",
+    )?;
+    let rows = statement.query_map([workspace_id], conversation_row)?;
+    Ok(rows.filter_map(Result::ok).collect())
+}
+
+#[tauri::command]
 pub fn create_conversation(
     workspace_id: String,
     worktree_id: Option<String>,
@@ -192,6 +211,39 @@ fn archive_conversation_record(connection: &Connection, id: &str, now: &str) -> 
         ));
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn restore_conversation(id: String, state: State<'_, AppState>) -> CommandResult<Conversation> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    restore_conversation_record(&connection, &id, &Utc::now().to_rfc3339())
+}
+
+fn restore_conversation_record(
+    connection: &Connection,
+    id: &str,
+    now: &str,
+) -> CommandResult<Conversation> {
+    let changed = connection.execute(
+        "UPDATE conversations SET archived_at = NULL, updated_at = ?1 WHERE id = ?2 AND archived_at IS NOT NULL",
+        params![now, id],
+    )?;
+    if changed == 0 {
+        return Err(CommandError::new(
+            "conversation_not_found",
+            "Chat was not found or is already active",
+        ));
+    }
+    connection
+        .query_row(
+            "SELECT id, workspace_id, worktree_id, title, provider, provider_session_id, created_at, updated_at, archived_at FROM conversations WHERE id = ?1",
+            [id],
+            conversation_row,
+        )
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -371,5 +423,38 @@ mod tests {
         assert_eq!(active, 0);
         assert_eq!(messages, 1);
         assert!(archive_conversation_record(&connection, "chat-1", "later").is_err());
+    }
+
+    #[test]
+    fn restoring_an_archived_chat_makes_it_active_again() {
+        let connection = Connection::open_in_memory().expect("test database should open");
+        connection.execute_batch(
+            r#"
+            CREATE TABLE conversations (
+              id TEXT PRIMARY KEY,
+              workspace_id TEXT NOT NULL,
+              worktree_id TEXT,
+              title TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              provider_session_id TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              archived_at TEXT
+            );
+            INSERT INTO conversations(
+              id, workspace_id, worktree_id, title, provider, created_at, updated_at, archived_at
+            ) VALUES (
+              'chat-1', 'project-1', 'tree-1', 'Recovered chat', 'codex', 'created', 'archived', 'archived'
+            );
+            "#,
+        ).expect("test record should insert");
+
+        let restored = restore_conversation_record(&connection, "chat-1", "restored")
+            .expect("chat should restore");
+
+        assert_eq!(restored.title, "Recovered chat");
+        assert_eq!(restored.worktree_id.as_deref(), Some("tree-1"));
+        assert!(restored.archived_at.is_none());
+        assert!(restore_conversation_record(&connection, "chat-1", "later").is_err());
     }
 }
