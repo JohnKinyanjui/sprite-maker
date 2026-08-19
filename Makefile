@@ -73,7 +73,7 @@ release: collect
 release-macos: verify
 	@test "$(HOST_OS)" = Darwin || { printf '%s\n' 'Universal macOS bundles must be built on macOS.' >&2; exit 1; }
 	rustup target add aarch64-apple-darwin x86_64-apple-darwin
-	$(TAURI) build -- --target $(MACOS_TARGET)
+	$(TAURI) build --target $(MACOS_TARGET)
 	$(MAKE) macos BUNDLE_DIR='$(MACOS_BUNDLE_DIR)' ARCH_LABEL=universal
 	@printf 'Universal macOS artifacts are ready in %s\n' '$(RELEASE_DIR)/macos'
 

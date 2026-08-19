@@ -2,10 +2,20 @@
 
 ## Unreleased
 
+## 0.3.1 — 2026-08-19
+
+### Terrain and project recovery
+
+- Added safe project backup, restore, and import workflows that preserve rigs and current project data.
+- Added archived-chat recovery, asset-version restoration, Terrain Studio, canonical terrain-mask generation, and Godot 4 TileSet export.
+- Removed terrain generation's dependency on legacy worktree types so the current request determines the correct asset category and output folder.
+- Made Terrain and VFX tools available from every project section and added a production-ready desert terrain atlas.
+
 ### Distribution
 
 - Restored tag-triggered GitHub release builds for Windows and Linux while keeping costly macOS builds off GitHub-hosted runners.
 - Added local universal macOS build and upload commands covering both Apple Silicon and Intel Macs.
+- Fixed the local universal macOS command so Tauri combines the two supported Rust architecture builds correctly.
 
 ## 0.3.0 — 2026-08-17
 

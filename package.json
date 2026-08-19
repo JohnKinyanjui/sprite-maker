@@ -1,6 +1,6 @@
 {
   "name": "sprite-maker",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A local-first AI game asset development environment",
   "type": "module",
   "scripts": {
