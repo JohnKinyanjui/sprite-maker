@@ -108,6 +108,32 @@ fn explicit_count(prompt: &str, unit: &str) -> Option<u32> {
     })
 }
 
+fn inferred_style(text: &str) -> Option<(u32, u32, &'static str, u32, u32)> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("graphic adventure")
+        || lower.contains("graphic-adventure")
+        || lower.contains("angular concept")
+    {
+        Some((192, 256, "graphic adventure", 4, 8))
+    } else if lower.contains("cozy chibi")
+        || lower.contains("cozy-chibi")
+        || lower.contains("rounded cartoon")
+    {
+        Some((128, 160, "cozy chibi", 4, 8))
+    } else if lower.contains("pixel rpg")
+        || lower.contains("pixel-rpg")
+        || lower.contains("stardew")
+        || lower.contains("farming rpg")
+        || lower.contains("cozy 16-bit")
+    {
+        Some((48, 64, "pixel RPG", 4, 8))
+    } else if lower.contains("platform") || lower.contains("side-scroller") {
+        Some((32, 32, "pixel platformer", 6, 12))
+    } else {
+        None
+    }
+}
+
 fn infer_brief(prompt: &str) -> SpriteBrief {
     let lower = prompt.to_ascii_lowercase();
     let explicitly_game_object = lower.contains("game object")
@@ -212,43 +238,26 @@ fn infer_brief(prompt: &str) -> SpriteBrief {
         _ => HarnessKind::Character,
     };
 
-    let (mut width, mut height, preset, mut frames, mut fps) = if lower
-        .contains("graphic adventure")
-        || lower.contains("graphic-adventure")
-        || lower.contains("angular concept")
-    {
-        (192, 256, "graphic adventure", 4, 8)
-    } else if lower.contains("cozy chibi")
-        || lower.contains("cozy-chibi")
-        || lower.contains("rounded cartoon")
-    {
-        (128, 160, "cozy chibi", 4, 8)
-    } else if lower.contains("pixel rpg")
-        || lower.contains("pixel-rpg")
-        || lower.contains("stardew")
-        || lower.contains("farming rpg")
-        || lower.contains("cozy 16-bit")
-    {
-        (48, 64, "pixel RPG", 4, 8)
-    } else if lower.contains("platform") || lower.contains("side-scroller") {
-        (32, 32, "pixel platformer", 6, 12)
-    } else if harness == HarnessKind::Tileset {
-        (384, 256, "terrain tileset atlas", 1, 1)
-    } else if category == "terrain" {
-        (128, 128, "terrain game object", 1, 1)
-    } else if category == "effects" {
-        // Effects need enough pixel area for a readable core, halo and
-        // particles. At 32px, ImageGen masters collapse into a tiny blob when
-        // centered on a gameplay canvas (the failure mode visible in the old
-        // fireball experiments).
-        (128, 128, "animated effect", 8, 12)
-    } else if category == "props" {
-        (128, 128, "inventory prop", 1, 1)
-    } else if category == "creatures" {
-        (128, 128, "game creature", 6, 10)
-    } else {
-        (128, 128, "general ImageGen character", 4, 8)
-    };
+    let (mut width, mut height, preset, mut frames, mut fps) =
+        if let Some(style) = inferred_style(prompt) {
+            style
+        } else if harness == HarnessKind::Tileset {
+            (384, 256, "terrain tileset atlas", 1, 1)
+        } else if category == "terrain" {
+            (128, 128, "terrain game object", 1, 1)
+        } else if category == "effects" {
+            // Effects need enough pixel area for a readable core, halo and
+            // particles. At 32px, ImageGen masters collapse into a tiny blob when
+            // centered on a gameplay canvas (the failure mode visible in the old
+            // fireball experiments).
+            (128, 128, "animated effect", 8, 12)
+        } else if category == "props" {
+            (128, 128, "inventory prop", 1, 1)
+        } else if category == "creatures" {
+            (128, 128, "game creature", 6, 10)
+        } else {
+            (128, 128, "general ImageGen character", 4, 8)
+        };
 
     if category == "characters" && (lower.contains("walk") || lower.contains("walking")) {
         frames = 8;
@@ -362,12 +371,19 @@ pub fn studio_prompt(
             prompt
         );
     }
-    let inference = if context.is_empty() {
-        prompt.to_string()
-    } else {
-        format!("{prompt}\n{context}")
-    };
-    let mut brief = infer_brief(&inference);
+    // Route from the current user request only. Context may contain legacy
+    // worktree kinds or misfiled asset paths; those describe where the chat
+    // came from, not what the user is asking Sprite Studio to create now.
+    let mut brief = infer_brief(prompt);
+    // Saved style context may supply character proportions, but it is never
+    // allowed to reroute the requested asset or replace explicit user style.
+    if brief.harness != HarnessKind::Tileset && inferred_style(prompt).is_none() {
+        if let Some((width, height, preset, _, _)) = inferred_style(context) {
+            brief.width = width;
+            brief.height = height;
+            brief.preset = preset;
+        }
+    }
     if let Some(generation) = generation {
         if brief.harness == HarnessKind::Tileset {
             (brief.width, brief.height) = match generation.quality.as_str() {
@@ -518,7 +534,7 @@ pub fn studio_prompt(
         "This routed job has no paired-limb identity requirement."
     };
     format!(
-        "You are the creation agent inside Sprite Studio. Obey the routed harness. All router, harness, preset, quality-gate, and internal-review text you need is embedded in this prompt; do not search the workspace for `references/*.md` files. ImageGen may create one source master. Animation timing and poses come from a saved deterministic rig, never from independently invented AI frames. Render rig-only animations with Sprite Studio's native rig engine or `.sprite-studio/sprite_rig.py`. Use ImageGen on animation frames only when the user explicitly selected AI polish or experimental full redraw, and only after rough rig frames exist as pose authority. Pose sheets remain forbidden. Preserve every unrelated workspace asset: never move, delete, rename, or overwrite existing assets unless the user explicitly asked to modify that exact asset. The routed asset category is a hard contract: the rig category, output folder, generation manifest category, scanned assets, and final response must all match the routed category below. Never reuse an older rig or source because its filename or appearance is similar; provenance must trace to the exact focused reference. Before reporting success, run the silent internal acceptance loop, validate the saved rig and `.sprite-studio/last-generation.json`, preview at least three cycles, and run native quality analysis.\n\n\
+        "You are the creation agent inside Sprite Studio. Obey the routed harness. Routing is derived only from the current USER REQUEST and an explicit slash command. Legacy worktree labels, project-section names, descriptions, reference categories, and existing asset paths are context only and must never change or block the routed category. All router, harness, preset, quality-gate, and internal-review text you need is embedded in this prompt; do not search the workspace for `references/*.md` files. ImageGen may create one source master. Animation timing and poses come from a saved deterministic rig, never from independently invented AI frames. Render rig-only animations with Sprite Studio's native rig engine or `.sprite-studio/sprite_rig.py`. Use ImageGen on animation frames only when the user explicitly selected AI polish or experimental full redraw, and only after rough rig frames exist as pose authority. Pose sheets remain forbidden. Preserve every unrelated workspace asset: never move, delete, rename, or overwrite existing assets unless the user explicitly asked to modify that exact asset. The routed asset category is a hard contract: the rig category, output folder, generation manifest category, scanned assets, and final response must all match the routed category below. Never reuse an older rig or source because its filename or appearance is similar; provenance must trace to the exact focused reference. Before reporting success, run the silent internal acceptance loop, validate the saved rig and `.sprite-studio/last-generation.json`, preview at least three cycles, and run native quality analysis.\n\n\
          DETERMINISTIC HARNESS BRIEF\n\
          - routed harness: {}\n\
          - asset category: {}\n\
@@ -669,6 +685,36 @@ mod tests {
         assert!(prompt.contains("exactly one final PNG"));
         assert!(prompt.contains("one-element `files` array"));
         assert!(!prompt.contains("AI FRAME RECOMMENDATION"));
+    }
+
+    #[test]
+    fn user_request_overrides_legacy_worktree_type_context() {
+        let prompt = studio_prompt(
+            "make a desert terrain tileset",
+            Some("Active worktree: Old heroes (character). Selected asset: assets/characters/old_hero.png"),
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("routed harness: terrain tileset"));
+        assert!(prompt.contains("asset category: terrain"));
+        assert!(prompt.contains("logical canvas: 384x256 pixels"));
+        assert!(prompt.contains("write every generated frame to `assets/terrain/`"));
+        assert!(prompt.contains("Legacy worktree labels"));
+    }
+
+    #[test]
+    fn explicit_user_style_overrides_saved_style_context() {
+        let prompt = studio_prompt(
+            "make a pixel RPG character, single frame",
+            Some("Selected style preset: Cozy chibi. rounded cartoon"),
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("logical canvas: 48x64 pixels"));
+        assert!(prompt.contains("inferred preset: pixel RPG"));
+        assert!(prompt.contains("frame count: 1"));
     }
 
     #[test]

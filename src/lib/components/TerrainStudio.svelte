@@ -170,7 +170,7 @@
         </footer>
       </main>
     </div>
-  {:else}<div class="empty"><Map size={30}/><strong>No atlas linked to this Terrain worktree</strong><p>Import or link a terrain image from the Sprites tab, then return here to slice it.</p></div>{/if}
+  {:else}<div class="empty"><Map size={30}/><strong>No terrain atlas linked to this project section</strong><p>Import or link a terrain image from the Sprites tab, then return here to slice it.</p></div>{/if}
 </section>
 
 <style>
