@@ -1,10 +1,14 @@
 .DEFAULT_GOAL := help
 
 BUN ?= bun
+GH ?= gh
 TAURI := $(BUN) run tauri
 VERSION := $(shell node -p "require('./package.json').version")
+TAG ?= v$(VERSION)
 RELEASE_DIR ?= release-artifacts/$(VERSION)
 BUNDLE_DIR := src-tauri/target/release/bundle
+MACOS_TARGET := universal-apple-darwin
+MACOS_BUNDLE_DIR := src-tauri/target/$(MACOS_TARGET)/release/bundle
 HOST_OS := $(shell uname -s)
 HOST_ARCH := $(shell uname -m)
 
@@ -29,7 +33,7 @@ else
   $(error Unsupported host '$(HOST_OS)'. Build releases on macOS, Windows, or Linux.)
 endif
 
-.PHONY: help install check test native-test verify bundle collect release macos linux windows
+.PHONY: help install check test native-test verify bundle collect release release-macos publish-macos macos linux windows
 
 help:
 	@printf '%s\n' \
@@ -38,6 +42,8 @@ help:
 	  '  make verify        Run frontend and Rust checks.' \
 	  '  make bundle        Build native bundles for this machine.' \
 	  '  make release       Verify, build, and collect this machine’s installers.' \
+	  '  make release-macos Build one universal Intel + Apple Silicon macOS release.' \
+	  '  make publish-macos Build macOS locally and upload it to TAG (default: v<version>).' \
 	  '' \
 	  'Artifacts are collected under release-artifacts/<version>/<platform>.' \
 	  'Build each platform on its native host: macOS for DMG/app archive, Windows for EXE/MSI, Linux for AppImage/DEB/RPM.'
@@ -63,6 +69,19 @@ collect: bundle $(PLATFORM)
 
 release: collect
 	@printf 'Local release artifacts are ready in %s\n' '$(RELEASE_DIR)/$(PLATFORM)'
+
+release-macos: verify
+	@test "$(HOST_OS)" = Darwin || { printf '%s\n' 'Universal macOS bundles must be built on macOS.' >&2; exit 1; }
+	rustup target add aarch64-apple-darwin x86_64-apple-darwin
+	$(TAURI) build -- --target $(MACOS_TARGET)
+	$(MAKE) macos BUNDLE_DIR='$(MACOS_BUNDLE_DIR)' ARCH_LABEL=universal
+	@printf 'Universal macOS artifacts are ready in %s\n' '$(RELEASE_DIR)/macos'
+
+publish-macos: release-macos
+	@command -v $(GH) >/dev/null || { printf '%s\n' 'Install and authenticate GitHub CLI before publishing.' >&2; exit 1; }
+	@$(GH) release view '$(TAG)' >/dev/null || { printf 'GitHub release %s does not exist yet. Wait for the Windows/Linux workflow to finish.\n' '$(TAG)' >&2; exit 1; }
+	$(GH) release upload '$(TAG)' '$(RELEASE_DIR)/macos/'*.dmg '$(RELEASE_DIR)/macos/'*.app.tar.gz --clobber
+	@printf 'Uploaded universal macOS artifacts to GitHub release %s\n' '$(TAG)'
 
 macos:
 	@test "$(HOST_OS)" = Darwin || { printf '%s\n' 'macOS bundles must be built on macOS.' >&2; exit 1; }

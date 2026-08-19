@@ -199,15 +199,17 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 make release
 ```
 
-`make release` runs the frontend and Rust tests, builds Tauri locally, and collects the installable files in `release-artifacts/<version>/<platform>`. There is no GitHub Actions release build.
+`make release` runs the frontend and Rust tests, builds Tauri locally, and collects the installable files in `release-artifacts/<version>/<platform>`.
 
-Build each platform on its native machine, then combine the collected folders when publishing a release:
+Tagged GitHub releases build Linux and Windows automatically. macOS stays local because hosted macOS runners are substantially more expensive:
 
-| Host machine | `make release` produces |
-| --- | --- |
-| macOS | `.dmg` and a `.app.tar.gz` archive |
-| Windows | NSIS `.exe` and `.msi` installers |
-| Linux | `.AppImage`, `.deb`, and `.rpm` packages |
+| Platform | Build path | Release files |
+| --- | --- | --- |
+| macOS | `make release-macos` on a Mac | Universal Intel + Apple Silicon `.dmg` and `.app.tar.gz` |
+| Windows | GitHub release workflow | NSIS `.exe` and `.msi` installers |
+| Linux | GitHub release workflow | `.AppImage`, `.deb`, and `.rpm` packages |
+
+After the tag workflow creates the GitHub release, run `make publish-macos` to build the universal macOS bundle locally and attach it to the matching `v<version>` release. Set a different tag with `make publish-macos TAG=v0.3.1` when needed.
 
 Use `make help` to see the available local commands. Tauri creates platform-native installers on the relevant build host; this repository contains no Android or iOS targets.
 

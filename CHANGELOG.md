@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Distribution
+
+- Restored tag-triggered GitHub release builds for Windows and Linux while keeping costly macOS builds off GitHub-hosted runners.
+- Added local universal macOS build and upload commands covering both Apple Silicon and Intel Macs.
+
 ## 0.3.0 — 2026-08-17
 
 ### Community providers
