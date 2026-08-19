@@ -134,6 +134,35 @@ fn inferred_style(text: &str) -> Option<(u32, u32, &'static str, u32, u32)> {
     }
 }
 
+fn has_explicit_asset_subject(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    [
+        "monster", "creature", "centipede", "enemy", "animal", "beast", "insect", "spider",
+        "slime", "rabbit", "bunny", "hare", "fox", "wolf", "bear", "cat", "dog", "bird",
+        "bat", "character", "hero", "npc", "knight", "farmer", "herbalist", "tile", "tileset",
+        "tilemap", "terrain", "ground", "tree", "bush", "plant", "rock", "effect", "spark",
+        "smoke", "explosion", "burst", "impact", "fireball", "flame", "fire", "frost", "ice",
+        "lightning", "thunder", "beam", "projectile", "spell", "magic", "slash", "prop", "item",
+        "icon", "potion", "weapon", "object", "chest", "door", "machine", "vehicle", "torch",
+        "turret",
+    ]
+    .iter()
+    .any(|word| has_word(&lower, word))
+}
+
+fn asset_identity_context(context: &str) -> String {
+    context
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("Context asset:")
+                || trimmed.starts_with("Selected asset:")
+                || trimmed.starts_with("FOCUSED CHAT REFERENCE:")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn infer_brief(prompt: &str) -> SpriteBrief {
     let lower = prompt.to_ascii_lowercase();
     let explicitly_game_object = lower.contains("game object")
@@ -371,10 +400,16 @@ pub fn studio_prompt(
             prompt
         );
     }
-    // Route from the current user request only. Context may contain legacy
-    // worktree kinds or misfiled asset paths; those describe where the chat
-    // came from, not what the user is asking Sprite Studio to create now.
-    let mut brief = infer_brief(prompt);
+    // Explicit user wording owns routing. For deictic requests such as
+    // "animate this", only the selected/focused asset identity is a valid
+    // fallback; legacy worktree labels and style prose remain irrelevant.
+    let asset_identity = asset_identity_context(context);
+    let routing_prompt = if !has_explicit_asset_subject(prompt) && !asset_identity.is_empty() {
+        format!("{prompt}\n{asset_identity}")
+    } else {
+        prompt.to_string()
+    };
+    let mut brief = infer_brief(&routing_prompt);
     // Saved style context may supply character proportions, but it is never
     // allowed to reroute the requested asset or replace explicit user style.
     if brief.harness != HarnessKind::Tileset && inferred_style(prompt).is_none() {
@@ -534,7 +569,7 @@ pub fn studio_prompt(
         "This routed job has no paired-limb identity requirement."
     };
     format!(
-        "You are the creation agent inside Sprite Studio. Obey the routed harness. Routing is derived only from the current USER REQUEST and an explicit slash command. Legacy worktree labels, project-section names, descriptions, reference categories, and existing asset paths are context only and must never change or block the routed category. All router, harness, preset, quality-gate, and internal-review text you need is embedded in this prompt; do not search the workspace for `references/*.md` files. ImageGen may create one source master. Animation timing and poses come from a saved deterministic rig, never from independently invented AI frames. Render rig-only animations with Sprite Studio's native rig engine or `.sprite-studio/sprite_rig.py`. Use ImageGen on animation frames only when the user explicitly selected AI polish or experimental full redraw, and only after rough rig frames exist as pose authority. Pose sheets remain forbidden. Preserve every unrelated workspace asset: never move, delete, rename, or overwrite existing assets unless the user explicitly asked to modify that exact asset. The routed asset category is a hard contract: the rig category, output folder, generation manifest category, scanned assets, and final response must all match the routed category below. Never reuse an older rig or source because its filename or appearance is similar; provenance must trace to the exact focused reference. Before reporting success, run the silent internal acceptance loop, validate the saved rig and `.sprite-studio/last-generation.json`, preview at least three cycles, and run native quality analysis.\n\n\
+        "You are the creation agent inside Sprite Studio. Obey the routed harness. Explicit subject words in the current USER REQUEST and an explicit slash command own routing. When the request says only `this`, `it`, or `selected`, the selected/focused asset filename may identify the subject; its legacy folder, worktree label, project-section name, description, reference category, and style prose must never override the subject. All router, harness, preset, quality-gate, and internal-review text you need is embedded in this prompt; do not search the workspace for `references/*.md` files. ImageGen may create one source master. Animation timing and poses come from a saved deterministic rig, never from independently invented AI frames. Render rig-only animations with Sprite Studio's native rig engine or `.sprite-studio/sprite_rig.py`. Use ImageGen on animation frames only when the user explicitly selected AI polish or experimental full redraw, and only after rough rig frames exist as pose authority. Pose sheets remain forbidden. Preserve every unrelated workspace asset: never move, delete, rename, or overwrite existing assets unless the user explicitly asked to modify that exact asset. The routed asset category is a hard contract: the rig category, output folder, generation manifest category, scanned assets, and final response must all match the routed category below. Never reuse an older rig or source because its filename or appearance is similar; provenance must trace to the exact focused reference. Before reporting success, run the silent internal acceptance loop, validate the saved rig and `.sprite-studio/last-generation.json`, preview at least three cycles, and run native quality analysis. Visual imperfections must degrade gracefully: after one repair attempt, publish the best structurally valid candidate and simplify motion when needed, ending with `GENERATION_WARNING: <concise limitation>`. An explicit animation request requires at least two distinct frames; never call a one-frame fallback an animation. Use `GENERATION_FAILED` only when no valid workspace-confined result of the requested kind can be produced at all. Never restore an old manifest as new output. Keep the user-facing reply to the result and any warning in at most three short sentences; never narrate the internal review or retry process.\n\n\
          DETERMINISTIC HARNESS BRIEF\n\
          - routed harness: {}\n\
          - asset category: {}\n\
@@ -700,7 +735,21 @@ mod tests {
         assert!(prompt.contains("asset category: terrain"));
         assert!(prompt.contains("logical canvas: 384x256 pixels"));
         assert!(prompt.contains("write every generated frame to `assets/terrain/`"));
-        assert!(prompt.contains("Legacy worktree labels"));
+        assert!(prompt.contains("legacy folder, worktree label"));
+    }
+
+    #[test]
+    fn animate_this_uses_selected_asset_identity_without_trusting_its_folder() {
+        let prompt = studio_prompt(
+            "animate this hopping forward",
+            Some("Active project section: Old heroes.\nContext asset: assets/characters/woodland-rabbit-retry_01.png\nSelected art direction: Pixel RPG."),
+            None,
+            Some("animate"),
+        );
+
+        assert!(prompt.contains("routed harness: creature"));
+        assert!(prompt.contains("asset category: creatures"));
+        assert!(prompt.contains("write every generated frame to `assets/creatures/`"));
     }
 
     #[test]

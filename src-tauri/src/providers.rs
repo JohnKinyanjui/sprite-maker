@@ -1085,6 +1085,15 @@ fn provider_failure_message(
     }
 }
 
+fn response_reports_generation_failure(response: &str) -> bool {
+    let lower = response.to_ascii_lowercase();
+    lower.contains("generation_failed:")
+        || lower.contains("unable to publish the")
+        || lower.contains("withdrawing the candidate")
+        || (lower.contains("did not pass the final visual acceptance gate")
+            && lower.contains("restor"))
+}
+
 #[tauri::command]
 pub fn start_provider_message(
     conversation_id: String,
@@ -1615,8 +1624,13 @@ async fn run_provider(app: AppHandle, run: ProviderRun, mut cancel_rx: oneshot::
                     );
                 }
             }
-            let _ = update_message(&state, &assistant_id, &response, "completed");
-            emit(&app, &request_id, &conversation_id, "completed", response);
+            if response_reports_generation_failure(&response) {
+                let _ = update_message(&state, &assistant_id, &response, "failed");
+                emit(&app, &request_id, &conversation_id, "failed", response);
+            } else {
+                let _ = update_message(&state, &assistant_id, &response, "completed");
+                emit(&app, &request_id, &conversation_id, "completed", response);
+            }
         }
         Ok(exit) => {
             let mut message = provider_failure_message(
@@ -2045,7 +2059,8 @@ mod tests {
     use super::{
         append_stream_text, codex_arguments, login_shell_path, login_shell_path_with_timeout,
         merge_provider_paths, parse_codex_line, parse_stream_line, provider_arguments,
-        provider_environment_path, provider_failure_message, validate_provider_options,
+        provider_environment_path, provider_failure_message, response_reports_generation_failure,
+        validate_provider_options,
     };
     use crate::models::{GenerationOptions, ProviderRequestOptions};
     use std::{
@@ -2340,6 +2355,16 @@ mod tests {
 
         assert!(message.contains("resume payload is invalid"));
         assert!(message.contains("provider diagnostic context"));
+    }
+
+    #[test]
+    fn accepted_process_with_rejected_generation_is_a_failure() {
+        assert!(response_reports_generation_failure(
+            "Unable to publish the rabbit hop: the repaired rig did not pass the final visual acceptance gate, so I am restoring the prior manifest."
+        ));
+        assert!(!response_reports_generation_failure(
+            "Published rabbit_hop with nine validated frames."
+        ));
     }
 
     #[test]

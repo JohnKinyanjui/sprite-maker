@@ -494,6 +494,29 @@ pub fn get_generation_manifest(
     read_generation_manifest(&root)
 }
 
+#[tauri::command]
+pub fn get_generation_fingerprint(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<String>> {
+    let root = workspace_path(&state, &workspace_id)?;
+    read_generation_manifest(&root)?
+        .map(|manifest| generation_fingerprint(&root, &manifest))
+        .transpose()
+}
+
+fn generation_fingerprint(root: &Path, manifest: &GenerationManifest) -> CommandResult<String> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(manifest.name.as_bytes());
+    hasher.update(manifest.category.as_bytes());
+    hasher.update(manifest.fps.to_string().as_bytes());
+    for relative in &manifest.files {
+        hasher.update(relative.as_bytes());
+        hasher.update(content_hash(&root.join(relative))?.as_bytes());
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 fn read_generation_manifest(root: &Path) -> CommandResult<Option<GenerationManifest>> {
     let path = root.join(".sprite-studio/last-generation.json");
     if !path.is_file() {
@@ -574,7 +597,7 @@ pub fn scan_generation_assets(
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect, read_generation_manifest, safe_category, upsert};
+    use super::{generation_fingerprint, inspect, read_generation_manifest, safe_category, upsert};
     use crate::{database, AppState};
     use image::{Rgba, RgbaImage};
     use std::{collections::HashMap, sync::Mutex};
@@ -603,6 +626,31 @@ mod tests {
             .expect("stale timestamp");
         assert!(effective > stale);
 
+        std::fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn generation_fingerprint_tracks_output_content_not_manifest_rewrites() {
+        let root = std::env::temp_dir().join(format!("sprite-studio-fingerprint-test-{}", Uuid::new_v4()));
+        let output = root.join("assets/creatures/rabbit.png");
+        std::fs::create_dir_all(output.parent().expect("asset parent")).expect("asset directory");
+        std::fs::write(&output, b"first rabbit").expect("asset file");
+        let manifest = crate::models::GenerationManifest {
+            kind: Some("sprite".into()),
+            name: "rabbit-hop".into(),
+            category: "creatures".into(),
+            fps: 12.0,
+            files: vec!["assets/creatures/rabbit.png".into()],
+            generated_at: "2026-08-19T00:00:00Z".into(),
+        };
+
+        let original = generation_fingerprint(&root, &manifest).expect("first fingerprint");
+        let mut rewritten = manifest.clone();
+        rewritten.generated_at = "2026-08-19T01:00:00Z".into();
+        assert_eq!(original, generation_fingerprint(&root, &rewritten).expect("rewritten fingerprint"));
+
+        std::fs::write(&output, b"repaired rabbit").expect("updated asset");
+        assert_ne!(original, generation_fingerprint(&root, &rewritten).expect("updated fingerprint"));
         std::fs::remove_dir_all(root).expect("test directory should be removed");
     }
 

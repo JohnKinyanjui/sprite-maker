@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { contentWithoutSpriteOutputLinks, inferMessageGeneration, inferMessagePack } from "../src/lib/message-generations";
+import { contentWithoutSpriteOutputLinks, inferMessageGeneration, inferMessagePack, reportsGenerationFailure, reportsGenerationWarning } from "../src/lib/message-generations";
 import type { Animation, Asset, AssetPack, Message } from "../src/lib/types";
 
 const asset = (id: string, name: string): Asset => ({
@@ -33,6 +33,21 @@ describe("inferMessageGeneration", () => {
     const result = inferMessageGeneration(message("Files rabbit_hop_01.png through rabbit_hop_02.png"), assets, animations);
     expect(result?.animationId).toBe("hop");
     expect(result?.fps).toBe(10);
+  });
+
+  test("never restores stale metadata for a rejected generation", () => {
+    const failed = message("Unable to publish the rabbit hop: it did not pass the final visual acceptance gate.");
+    failed.metadata = { generation: { kind: "sprite-generation", name: "old-run", category: "characters", fps: 8, assetIds: ["old"] } };
+    expect(reportsGenerationFailure(failed.content)).toBe(true);
+    expect(inferMessageGeneration(failed, [asset("old", "old-run")], [])).toBeUndefined();
+  });
+
+  test("keeps the best artifact when generation completes with a warning", () => {
+    const warned = message("Published the best valid lion gallop. GENERATION_WARNING: minor top-down anatomy seam remains.");
+    warned.metadata = { generation: { kind: "sprite-generation", name: "lion-gallop", category: "creatures", fps: 10, assetIds: ["lion"] } };
+    expect(reportsGenerationWarning(warned.content)).toBe(true);
+    expect(reportsGenerationFailure(warned.content)).toBe(false);
+    expect(inferMessageGeneration(warned, [asset("lion", "lion-gallop")], [])?.assetIds).toEqual(["lion"]);
   });
 });
 

@@ -97,6 +97,7 @@ pub fn run() {
             assets::export_asset,
             terrain::export_godot_tileset,
             assets::get_generation_manifest,
+            assets::get_generation_fingerprint,
             assets::scan_generation_assets,
             assets::list_asset_versions,
             packs::list_asset_packs,

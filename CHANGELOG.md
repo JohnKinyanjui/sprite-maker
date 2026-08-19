@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.3.2 — 2026-08-19
+
+### Animation reliability
+
+- Fixed deictic animation requests such as “animate this” so the selected asset's identity determines the correct creature or character harness, even when an older asset is stored in the wrong category folder.
+- Prevented restored or unchanged generation manifests from attaching stale artwork to a new completed message.
+- Treated provider-reported generation failures as failures instead of completed sprite cards, while preserving the best valid multi-frame result when only a visual warning remains.
+- Rejected single-frame fallbacks as completed animations and used the renderer manifest's actual frame rate for accepted animation previews.
+- Updated creature animation guidance to make one motion-ready source repair, then publish the best connected multi-frame attempt with a concise warning when needed.
+
 ## 0.3.1 — 2026-08-19
 
 ### Terrain and project recovery

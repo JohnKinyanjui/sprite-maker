@@ -4,7 +4,7 @@
   import { assetUrl } from "$lib/api";
   import SpriteArtifactCard from "$lib/components/SpriteArtifactCard.svelte";
   import PackArtifactCard from "$lib/components/PackArtifactCard.svelte";
-  import { contentWithoutSpriteOutputLinks, inferMessageGeneration, inferMessagePack } from "$lib/message-generations";
+  import { contentWithoutSpriteOutputLinks, inferMessageGeneration, inferMessagePack, reportsGenerationFailure, reportsGenerationWarning } from "$lib/message-generations";
   import StylePicker from "$lib/components/StylePicker.svelte";
   import GenerationProfileMenu from "$lib/components/GenerationProfileMenu.svelte";
   import MarkdownMessage from "$lib/components/MarkdownMessage.svelte";
@@ -149,7 +149,9 @@
         {#each messages as message}
           {@const packResult = inferMessagePack(message,packs)}
           {@const generation = packResult ? undefined : generationFor(message)}
-          <article class:user={message.role === "user"} class:failed={message.status === "failed"}>
+          {@const generationFailed = message.role === "assistant" && reportsGenerationFailure(message.content)}
+          {@const generationWarning = message.role === "assistant" && reportsGenerationWarning(message.content)}
+          <article class:user={message.role === "user"} class:failed={message.status === "failed" || generationFailed}>
             <div class="avatar">{#if message.role === "user"}<span>You</span>{:else}<span class={`provider-mark compact ${provider?.id ?? ""}`}><ProviderLogo providerId={provider?.id ?? "agent"} label={provider?.name} size={14}/></span>{/if}</div>
             <div class="message-body">
               <div class="message-meta"><strong>{message.role === "user" ? "You" : provider?.name ?? "Assistant"}</strong><time>{new Date(message.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</time></div>
@@ -159,8 +161,9 @@
               {#if message.status === "running"}
                 <div class="working"><span class="spinner"></span> Working in project</div>
                 {#if activity.length}<div class="activity">{#each activity.slice(-5) as line}<div><Terminal size={12} /><span>{line}</span></div>{/each}</div>{/if}
-              {:else if message.status === "failed"}<div class="message-state"><AlertTriangle size={12} /> Failed</div>
+              {:else if message.status === "failed" || generationFailed}<div class="message-state"><AlertTriangle size={12} /> Failed</div>
               {:else if message.status === "cancelled"}<div class="message-state"><X size={12} /> Cancelled</div>
+              {:else if generationWarning}<div class="message-state"><AlertTriangle size={12} /> Completed with warning</div>
               {:else if message.role === "assistant"}<div class="message-state subtle"><Check size={11} /> Completed</div>{/if}
             </div>
           </article>

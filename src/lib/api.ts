@@ -39,6 +39,7 @@ export const api = {
   scanAssets: (workspaceId: string) => invoke<Asset[]>("scan_assets", { workspaceId }),
   listAssets: (workspaceId: string) => invoke<Asset[]>("list_assets", { workspaceId }),
   getGenerationManifest: (workspaceId: string) => invoke<GenerationManifest | null>("get_generation_manifest", { workspaceId }),
+  getGenerationFingerprint: (workspaceId: string) => invoke<string | null>("get_generation_fingerprint", { workspaceId }),
   scanGenerationAssets: (workspaceId: string) => invoke<Asset[]>("scan_generation_assets", { workspaceId }),
   listAssetPacks: (workspaceId: string) => invoke<AssetPack[]>("list_asset_packs", { workspaceId }),
   importAsset: (workspaceId: string, sourcePath: string, category: string) => invoke<Asset>("import_asset", { workspaceId, sourcePath, category }),

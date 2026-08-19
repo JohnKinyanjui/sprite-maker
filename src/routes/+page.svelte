@@ -33,7 +33,7 @@
   import { parseCustomArts, parseCustomSkills, type CustomArtStyle, type CustomSkill } from "$lib/library-types";
   import { errorMessage, type Animation, type AnimationPolishMode, type AnimationTemplate, type Asset, type AssetPack, type ChatGenerationProfile, type Conversation, type ImageProviderInput, type Message, type PackGenerationMetadata, type ProviderEvent, type ProviderRequestOptions, type ProviderStatus, type ReferenceCategory, type ReferenceImage, type Rig, type SidebarSnapshot, type SpriteGenerationMetadata, type SpriteSlashCommand, type TemplateApplication, type Workspace, type Worktree, type WorktreeKind } from "$lib/types";
 
-  type ActiveChatRequest = { id:string; conversationId:string; workspaceId:string; worktreeId?:string; prompt:string; command?:SpriteSlashCommand; generation:ProviderRequestOptions["generation"]; knownPackIds:string[]; startedAt:number };
+  type ActiveChatRequest = { id:string; conversationId:string; workspaceId:string; worktreeId?:string; prompt:string; command?:SpriteSlashCommand; generation:ProviderRequestOptions["generation"]; knownPackIds:string[]; previousGenerationFingerprint?:string; startedAt:number };
 
   let loading = $state(true);
   let workspaces = $state<Workspace[]>([]);
@@ -300,8 +300,10 @@
       if(command==="pack")activityByConversation={...activityByConversation,[conversation.id]:["AI is planning one coordinated asset pack","Items will share one style and remain separate static sprites"]};
       else if(/\b(?:terrain|tileset|tilemap|ground tiles?)\b/i.test(prompt))activityByConversation={...activityByConversation,[conversation.id]:["AI is planning one complete terrain atlas","Output will be one PNG containing compatible fills, edges, corners, strips, and transitions"]};
       else if(generation.frameMode==="auto")activityByConversation={...activityByConversation,[conversation.id]:["AI is inspecting the reference and will recommend a frame count",`Allowed range: ${generation.minFrames}–${generation.maxFrames} frames`]};
+      const previousGenerationFingerprint=await api.getGenerationFingerprint(workspace.id).catch(()=>null);
+      const startedAt=Date.now();
       const requestId=await api.startProviderMessage(conversation.id,prompt,context,options);
-      runningRequests={...runningRequests,[conversation.id]:{id:requestId,conversationId:conversation.id,workspaceId:workspace.id,worktreeId:worktree?.id,prompt,command,generation,knownPackIds:packs.map(pack=>pack.id),startedAt:Date.now()}};
+      runningRequests={...runningRequests,[conversation.id]:{id:requestId,conversationId:conversation.id,workspaceId:workspace.id,worktreeId:worktree?.id,prompt,command,generation,knownPackIds:packs.map(pack=>pack.id),previousGenerationFingerprint:previousGenerationFingerprint??undefined,startedAt}};
       if(selectedConversation?.id===conversation.id)messages=await api.listMessages(conversation.id);
       if(conversation.title==="New conversation"){
         const title=prompt.trim().replace(/^\/[a-z]+\s*/i,"").replace(/\s+/g," ").slice(0,42)||"New conversation";
@@ -314,12 +316,13 @@
   async function finalizeChatGeneration(request:ActiveChatRequest,response:string){
     if(!workspace||workspace.id!==request.workspaceId)return;
     const manifest=await api.getGenerationManifest(request.workspaceId).catch(()=>null);
+    const manifestFingerprint=manifest?await api.getGenerationFingerprint(request.workspaceId).catch(()=>null):null;
     // Never infer output from the assistant's prose. Re-renders commonly keep
     // the same asset IDs and may not mention file paths at all. The renderer's
     // manifest is the only authoritative handoff, but it must be newer than
     // this request so a stale workspace manifest cannot open unrelated art.
     const manifestTime=manifest?Date.parse(manifest.generatedAt):Number.NaN;
-    const freshManifest=Boolean(manifest&&Number.isFinite(manifestTime)&&manifestTime>=request.startedAt-2_000);
+    const freshManifest=Boolean(manifest&&manifestFingerprint&&manifestFingerprint!==request.previousGenerationFingerprint&&Number.isFinite(manifestTime)&&manifestTime>=request.startedAt-2_000);
     const generatedAssets=freshManifest?await api.scanGenerationAssets(request.workspaceId):[];
     const assetMap=new Map(assets.map(asset=>[asset.id,asset]));
     for(const asset of generatedAssets)assetMap.set(asset.id,asset);
@@ -328,23 +331,28 @@
     const responseText=response.toLowerCase();
     const generatedPack=request.command==="pack"?(createdPacks.find(pack=>responseText.includes(pack.name.toLowerCase())||responseText.includes(pack.id.toLowerCase())||pack.files.some(file=>responseText.includes(file.toLowerCase())))??(createdPacks.length===1?createdPacks[0]:undefined)):undefined;
     const manifestAssets=freshManifest?manifest!.files.map(path=>nextAssets.find(asset=>asset.relativePath===path)).filter((asset):asset is Asset=>Boolean(asset)):[];
+    // An explicit animation request must never be presented as complete when
+    // the renderer only handed back a static fallback.
+    const rejectedStaticAnimation=request.command==="animate"&&manifestAssets.length>0&&manifestAssets.length<2;
+    const acceptedManifestAssets=rejectedStaticAnimation?[]:manifestAssets;
+    const manifestFps=manifest&&Number.isFinite(manifest.fps)&&manifest.fps>0?manifest.fps:request.generation.fps;
     const packAssets=generatedPack?.files.map(path=>nextAssets.find(asset=>asset.relativePath===path)).filter((asset):asset is Asset=>Boolean(asset))??[];
     // Sprite Studio's component handoff is manifest-only. A tool response can
     // say “completed” after editing prose or an unrelated file; accepting
     // guessed paths here is what previously left the UI in chat with no asset
     // to show. Packs retain their own explicit pack handoff.
-    const related=request.command==="pack"?packAssets:manifestAssets;
+    const related=request.command==="pack"?packAssets:acceptedManifestAssets;
     assets=nextAssets;
     if(request.worktreeId&&related.length)await Promise.all(related.map(asset=>api.linkAssetToWorktree(request.worktreeId!,asset.id)));
     let animationId:string|undefined;
-    const ordered=manifestAssets.length?[...related]:[...related].sort((a,b)=>a.relativePath.localeCompare(b.relativePath,undefined,{numeric:true}));
+    const ordered=acceptedManifestAssets.length?[...related]:[...related].sort((a,b)=>a.relativePath.localeCompare(b.relativePath,undefined,{numeric:true}));
     if(request.command!=="pack"&&ordered.length>1){
       const existing=await api.listAnimations(request.workspaceId,request.worktreeId);const match=existing.find(animation=>animation.frames.length===ordered.length&&ordered.every((asset,index)=>animation.frames[index]?.assetId===asset.id));
-      if(match)animationId=match.id;else{const actualGeneration={...request.generation,frameMode:"fixed" as const,frames:ordered.length,minFrames:ordered.length,maxFrames:ordered.length};const motionPlan=await api.planMotion(request.prompt,actualGeneration).catch(()=>undefined);const baseName=ordered[0].name.replace(/[_-]?\d+$/i,"");const createdAnimation=await api.saveAnimation({workspaceId:request.workspaceId,worktreeId:request.worktreeId,name:baseName,fps:request.generation.fps,looping:true,frames:ordered.map(asset=>({assetId:asset.id})),motionPlan});animationId=createdAnimation.id;void api.queueQualityAnalysis(createdAnimation.id).catch(()=>undefined);}
+      if(match)animationId=match.id;else{const actualGeneration={...request.generation,frameMode:"fixed" as const,frames:ordered.length,minFrames:ordered.length,maxFrames:ordered.length,fps:manifestFps};const motionPlan=await api.planMotion(request.prompt,actualGeneration).catch(()=>undefined);const baseName=ordered[0].name.replace(/[_-]?\d+$/i,"");const createdAnimation=await api.saveAnimation({workspaceId:request.workspaceId,worktreeId:request.worktreeId,name:baseName,fps:manifestFps,looping:true,frames:ordered.map(asset=>({assetId:asset.id})),motionPlan});animationId=createdAnimation.id;void api.queueQualityAnalysis(createdAnimation.id).catch(()=>undefined);}
     }
     if(request.command!=="pack"&&ordered.length){
       const requestMessages=await api.listMessages(request.conversationId);const assistant=requestMessages.findLast(message=>message.role==="assistant"&&message.status==="completed");
-      if(assistant){const generation:SpriteGenerationMetadata={kind:"sprite-generation",name:ordered[0].name.replace(/[_-]?\d+$/i,""),category:ordered[0].category,fps:ordered.length>1?request.generation.fps:1,assetIds:ordered.map(asset=>asset.id),animationId};await api.updateMessageMetadata(assistant.id,{...assistant.metadata,generation});}
+      if(assistant){const generation:SpriteGenerationMetadata={kind:"sprite-generation",name:ordered[0].name.replace(/[_-]?\d+$/i,""),category:ordered[0].category,fps:ordered.length>1?manifestFps:1,assetIds:ordered.map(asset=>asset.id),animationId};await api.updateMessageMetadata(assistant.id,{...assistant.metadata,generation});}
     }
     if(generatedPack){const requestMessages=await api.listMessages(request.conversationId);const assistant=requestMessages.findLast(message=>message.role==="assistant"&&message.status==="completed");if(assistant){const packGeneration:PackGenerationMetadata={kind:"pack-generation",packId:generatedPack.id};await api.updateMessageMetadata(assistant.id,{...assistant.metadata,packGeneration});}}
     packs=nextPacks;
@@ -376,7 +384,7 @@
           }).catch(()=>undefined);
         }
       }else if(request.conversationId===selectedConversation?.id&&request.command!=="pack"){
-        notify("Generation completed without a fresh valid sprite manifest, so it was not accepted as a component update.","error");
+        notify(rejectedStaticAnimation?"Animation needs at least two fresh frames. The static fallback was kept as an asset but was not accepted as a completed animation.":"Generation completed without a fresh valid sprite manifest, so it was not accepted as a component update.","error");
       }
     }
   }

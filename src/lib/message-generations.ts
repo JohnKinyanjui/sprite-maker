@@ -10,6 +10,18 @@ const GENERIC_ANIMATION_WORDS = new Set([
   "cozy", "pixel", "traveling", "walking", "moving", "motion", "preview",
 ]);
 
+export function reportsGenerationFailure(content: string): boolean {
+  const lower = content.toLowerCase();
+  return lower.includes("generation_failed:")
+    || lower.includes("unable to publish the")
+    || lower.includes("withdrawing the candidate")
+    || (lower.includes("did not pass the final visual acceptance gate") && lower.includes("restor"));
+}
+
+export function reportsGenerationWarning(content: string): boolean {
+  return content.toLowerCase().includes("generation_warning:");
+}
+
 function mentionsAnimation(content: string, name: string): boolean {
   if (includesToken(content, name)) return true;
   // Agent responses usually use a readable subject name ("caterpillar")
@@ -38,12 +50,11 @@ function generationFromAnimation(animation: Animation, assets: Asset[]): SpriteG
 }
 
 export function inferMessageGeneration(message: Message, assets: Asset[], animations: Animation[]): SpriteGenerationMetadata | undefined {
+  if (message.role !== "assistant" || message.status !== "completed" || reportsGenerationFailure(message.content)) return;
   const stored = message.metadata.generation;
   if (stored && typeof stored === "object" && "kind" in stored && stored.kind === "sprite-generation") {
     return stored as SpriteGenerationMetadata;
   }
-  if (message.role !== "assistant" || message.status !== "completed") return;
-
   const content = message.content.toLowerCase();
   const mentionedAssets = assets.filter(asset =>
     includesToken(content, asset.relativePath)
@@ -76,12 +87,12 @@ export function inferMessageGeneration(message: Message, assets: Asset[], animat
 }
 
 export function inferMessagePack(message: Message, packs: AssetPack[]): { pack: AssetPack; metadata: PackGenerationMetadata } | undefined {
+  if (message.role !== "assistant" || message.status !== "completed" || reportsGenerationFailure(message.content)) return;
   const stored = message.metadata.packGeneration;
   if (stored && typeof stored === "object" && "kind" in stored && stored.kind === "pack-generation" && "packId" in stored) {
     const pack = packs.find(item => item.id === stored.packId);
     if (pack) return { pack, metadata: stored as PackGenerationMetadata };
   }
-  if (message.role !== "assistant" || message.status !== "completed") return;
   const content = message.content.toLowerCase();
   const pack = packs.find(item =>
     includesToken(content, item.id)
