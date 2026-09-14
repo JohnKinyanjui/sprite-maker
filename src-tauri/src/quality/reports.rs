@@ -101,22 +101,35 @@ pub(crate) fn get_quality_report_inner(
     animation_id: &str,
     state: &AppState,
 ) -> CommandResult<Option<QualityReport>> {
-    let connection = state
-        .db
-        .lock()
-        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
-    let mut report = connection
-        .query_row(
-            &format!(
-                "{} WHERE animation_id=?1 ORDER BY created_at DESC LIMIT 1",
-                select_report()
-            ),
-            [animation_id],
-            report_row,
-        )
-        .optional()?;
+    let mut report = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+        let mut report = connection
+            .query_row(
+                &format!(
+                    "{} WHERE animation_id=?1 ORDER BY created_at DESC LIMIT 1",
+                    select_report()
+                ),
+                [animation_id],
+                report_row,
+            )
+            .optional()?;
+        if let Some(report) = &mut report {
+            hydrate_report(&connection, report)?;
+        }
+        report
+    };
     if let Some(report) = &mut report {
-        hydrate_report(&connection, report)?;
+        if let Ok(contract_report) =
+            crate::pipeline::size_contract_check_inner(state, animation_id, None)
+        {
+            super::contract_bridge::merge_contract_checks(
+                &mut report.checks,
+                &contract_report.violations,
+            );
+        }
     }
     Ok(report)
 }

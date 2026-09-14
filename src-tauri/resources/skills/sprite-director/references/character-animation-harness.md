@@ -10,8 +10,8 @@ Use this harness whenever a character request has more than one frame. ImageGen 
 2. Inspect the master at 1× and enlarged nearest-neighbour scale. Identify reusable pixel parts: base/head/torso, left and right limbs, hair or cloth, held equipment, and accessories.
 3. Write one `rigVersion: 3` rig JSON with `rigProfile: "human_sprite_rig"` under `.sprite-studio/rigs/`. First record the observed hip, knee, ankle, shoulder, and elbow joints and their visibility. Then use precise polygon masks, bone envelopes, anatomical roles, pivots, anchors, parent attachments, named key poses, and explicit depth. Do not redraw or regenerate a part.
 4. Write an exact circular motion table, including the final-to-first transition, then express every frame as transforms of those same pixels.
-5. Run `python3 .sprite-studio/sprite_rig.py --validate .sprite-studio/rigs/<slug>.json` and fix every error before rendering.
-6. Run `python3 .sprite-studio/sprite_rig.py .sprite-studio/rigs/<slug>.json`.
+5. Call MCP **`save_rig`** with the rig JSON bound to the master `assetId`. Run **`analyze_rig_fit`** and fix every reported issue before rendering.
+6. Call MCP **`render_rig_animation`** to emit frame PNGs and the draft animation in the workspace.
 7. Inspect the rendered loop. In Rig-only mode revise masks, pivots, transforms, and small joint patches. In explicit AI Polish/Full redraw mode, use the frame-polish contract only after this rough-loop inspection.
 
 ## Rig specification

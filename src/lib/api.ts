@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { Animation, AnimationInput, AnimationTemplate, Asset, AssetPack, AssetVersion, BackgroundJob, Conversation, ExportResult, FrameOptimizationResult, GenerationManifest, ImageProviderInput, Message, MotionPlan, ProceduralVfxInput, ProjectBackup, ProviderConnectionTest, ProviderInstallResult, ProviderRequestOptions, ProviderStatus, PythonRuntimeStatus, QualityReport, ReferenceCategory, ReferenceImage, RigFitReport, RigInput, RigRenderResult, RigSuggestion, Rig, SidebarSnapshot, SpriteSheet, SpriteSheetInput, TemplateApplication, TerrainExportInput, TerrainExportResult, VfxEffect, Workspace, Worktree, WorktreeKind, WorkspaceRigSpec } from "$lib/types";
+import type { Animation, AnimationDirectionMeta, AnimationFrameScoreReport, AnimationInput, AnimationTemplate, Asset, AssetPack, AssetVersion, BackgroundJob, BrushStamp, CharacterAnchor, CharacterAnchorSummary, CharacterProfile, CharacterContractReport, CharacterPackExportResult, CleanAlphaReport, ContractRetryResult, Conversation, DirectionSetResult, ExportAnimationPreviewResult, ExportResult, FacingCheckReport, FrameOptimizationResult, GenerationManifest, GenerationSession, HardenAnimationOptions, HardenAnimationReport, ImageProviderInput, InterpolateRigAnimationFramesResult, InterpolateRigFramesResult, ListMissingMotionsResult, Message, MirrorAnimationResult, MotionBatchResult, MotionPlan, MotionPresetCatalog, PaintFrameAlphaResult, ProductionScoreReport, ProceduralVfxInput, ProjectBackup, ProviderConnectionTest, ProviderInstallResult, ProviderRequestOptions, ProviderStatus, PythonRuntimeStatus, QualityReport, ReferenceCategory, ReferenceImage, RegionMaskRect, RegionRegenResult, RigFitReport, RigInput, RigRenderResult, RigSuggestion, Rig, SharedPaletteReport, SidebarSnapshot, SizeContractReport, SplitStripResult, SpriteSheet, SpriteSheetInput, StripScoreReport, SubsampleVideoFramesResult, TemplateApplication, TerrainExportInput, TerrainExportResult, VfxEffect, Workspace, Worktree, WorktreeKind, WorkspaceRigSpec } from "$lib/types";
 
 export const api = {
   listWorkspaces: () => invoke<Workspace[]>("list_workspaces"),
@@ -48,7 +48,7 @@ export const api = {
   getGenerationManifest: (workspaceId: string) => invoke<GenerationManifest | null>("get_generation_manifest", { workspaceId }),
   getGenerationFingerprint: (workspaceId: string) => invoke<string | null>("get_generation_fingerprint", { workspaceId }),
   listWorkspaceRigSpecs: (workspaceId: string) => invoke<WorkspaceRigSpec[]>("list_workspace_rig_specs", { workspaceId }),
-  scanGenerationAssets: (workspaceId: string) => invoke<Asset[]>("scan_generation_assets", { workspaceId }),
+  scanGenerationAssets: (workspaceId: string, worktreeId?: string) => invoke<Asset[]>("scan_generation_assets", { workspaceId, worktreeId }),
   listAssetPacks: (workspaceId: string) => invoke<AssetPack[]>("list_asset_packs", { workspaceId }),
   importAsset: (workspaceId: string, sourcePath: string, category: string) => invoke<Asset>("import_asset", { workspaceId, sourcePath, category }),
   renameAsset: (id: string, name: string) => invoke<Asset>("rename_asset", { id, name }),
@@ -66,7 +66,13 @@ export const api = {
   listAnimations: (workspaceId: string, worktreeId?: string) => invoke<Animation[]>("list_animations", { workspaceId, worktreeId: worktreeId ?? null }),
   saveAnimation: (input: AnimationInput) => invoke<Animation>("save_animation", { input }),
   deleteAnimation: (id: string) => invoke<void>("delete_animation", { id }),
-  exportAnimation: (id: string, destination?: string) => invoke<ExportResult>("export_animation", { id, destination }),
+  exportAnimation: (id: string, destination?: string, format?: string) => invoke<ExportResult>("export_animation", { id, destination, format }),
+  checkCharacterContract: (workspaceId: string, worktreeId: string, anchorSlug?: string) => invoke<CharacterContractReport>("check_character_contract", { workspaceId, worktreeId, anchorSlug }),
+  exportCharacterPack: (input: { workspaceId: string; worktreeId: string; destination: string; anchorSlug?: string; metadataFormat?: string; includeAnimatedPreviews?: boolean }) => invoke<CharacterPackExportResult>("export_character_pack", { input }),
+  exportAnimationPreview: (input: { animationId: string; destination?: string; format?: string }) => invoke<ExportAnimationPreviewResult>("export_animation_preview", { input }),
+  listMissingMotions: (workspaceId: string, worktreeId: string, anchorSlug: string) => invoke<ListMissingMotionsResult>("list_missing_motions", { workspaceId, worktreeId, anchorSlug }),
+  listGenerationSessions: (workspaceId: string, worktreeId?: string) => invoke<GenerationSession[]>("list_generation_sessions", { workspaceId, worktreeId }),
+  getProductionScore: (workspaceId: string, worktreeId: string, anchorSlug?: string) => invoke<ProductionScoreReport>("get_production_score", { workspaceId, worktreeId, anchorSlug }),
   listJobs: (projectId: string, worktreeId?: string) => invoke<BackgroundJob[]>("list_jobs", { projectId, worktreeId: worktreeId ?? null }),
   cancelJob: (id: string) => invoke<BackgroundJob>("cancel_job", { id }),
   listSpriteSheets: (projectId: string, worktreeId?: string) => invoke<SpriteSheet[]>("list_sprite_sheets", { projectId, worktreeId: worktreeId ?? null }),
@@ -95,12 +101,57 @@ export const api = {
   aiSuggestRigPoints: (input: { assetId: string; morphology?: string; motion?: string; providerId?: string; model?: string; reasoningEffort?: string }) => invoke<RigSuggestion>("ai_suggest_rig_points", { input }),
   renderRigPreview: (input: RigInput) => invoke<string[]>("render_rig_preview", { input }),
   renderRigAnimation: (input: RigInput) => invoke<RigRenderResult>("render_rig_animation", { input }),
+  interpolateRigFrames: (input: { rig: RigInput; fromIndex: number; toIndex: number; steps: number }) =>
+    invoke<InterpolateRigFramesResult>("interpolate_rig_frames", { input: { rig: input.rig, fromIndex: input.fromIndex, toIndex: input.toIndex, steps: input.steps } }),
+  interpolateRigAnimationFrames: (input: { rig: RigInput; fromIndex: number; toIndex: number; steps: number; animationId: string; workspaceId: string; worktreeId?: string }) =>
+    invoke<InterpolateRigAnimationFramesResult>("interpolate_rig_animation_frames", { input }),
+  queueRegionRegen: (input: { animationId: string; frameIndex: number; regions: RegionMaskRect[]; brushStrokes?: BrushStamp[]; conversationId: string; prompt?: string }) =>
+    invoke<RegionRegenResult>("queue_region_regen", { input }),
+  subsampleVideoFrames: (input: { workspaceId: string; assetIds: string[]; minDelta?: number; stride?: number }) =>
+    invoke<SubsampleVideoFramesResult>("subsample_video_frames", { input }),
+  quantizeWorktreePalette: (input: { workspaceId: string; worktreeId?: string; anchorSlug?: string; colorCount?: number }) =>
+    invoke<SharedPaletteReport>("quantize_worktree_palette", { input }),
+  paintFrameAlpha: (input: { assetId: string; strokes: BrushStamp[]; mode: "erase" | "restore"; versionId?: string }) =>
+    invoke<PaintFrameAlphaResult>("paint_frame_alpha", { input }),
+  restoreAssetVersion: (assetId: string, versionId: string) =>
+    invoke<Asset>("restore_asset_version", { input: { assetId, versionId } }),
   listAnimationTemplates: (projectId: string) => invoke<AnimationTemplate[]>("list_animation_templates", { projectId }),
   createAnimationTemplate: (animationId: string, name: string, intent: string, motionDescription: string, frameMode: "fixed" | "auto", minFrames: number, maxFrames: number, generationPrompt = "", negativePrompt = "") => invoke<AnimationTemplate>("create_animation_template", { animationId, name, intent, motionDescription, frameMode, minFrames, maxFrames, generationPrompt, negativePrompt }),
   applyAnimationTemplate: (templateId: string, targetAssetId: string) => invoke<TemplateApplication>("apply_animation_template", { templateId, targetAssetId }),
   deleteAnimationTemplate: (id: string) => invoke<void>("delete_animation_template", { id }),
   getSetting: (key: string) => invoke<unknown>("get_setting", { key }),
   setSetting: (key: string, value: unknown) => invoke<void>("set_setting", { key, value }),
+  promoteAnchor: (workspaceId: string, assetId: string, slug?: string, autoOrient = false, view?: string) => invoke<CharacterAnchor>("promote_anchor", { input: { workspaceId, assetId, slug, autoOrient, view } }),
+  getAnchor: (workspaceId: string, slug: string) => invoke<CharacterAnchor>("get_anchor", { workspaceId, slug }),
+  listAnchors: (workspaceId: string) => invoke<CharacterAnchorSummary[]>("list_anchors", { workspaceId }),
+  getCharacterProfile: (workspaceId: string, slug: string) => invoke<CharacterProfile>("get_character_profile", { workspaceId, slug }),
+  refreshCharacterProfile: (workspaceId: string, slug: string, worktreeId?: string) => invoke<CharacterProfile>("refresh_character_profile", { workspaceId, slug, worktreeId }),
+  exportCharacterProfile: (input: { workspaceId: string; slug: string; destination: string }) => invoke<CharacterProfile>("export_character_profile", { input }),
+  importCharacterProfile: (input: { workspaceId: string; sourcePath: string }) => invoke<CharacterProfile>("import_character_profile", { input }),
+  detectAnchorFacing: (workspaceId: string, slug: string) => invoke<FacingCheckReport>("detect_anchor_facing", { workspaceId, slug }),
+  listFacingChecks: (workspaceId: string, slug?: string) => invoke<FacingCheckReport[]>("list_facing_checks", { input: { workspaceId, slug } }),
+  scoreAnimationFrames: (animationId: string) => invoke<AnimationFrameScoreReport>("score_animation_frames", { input: { animationId } }),
+  orientAnchor: (workspaceId: string, slug: string) => invoke<CharacterAnchor>("orient_anchor", { input: { workspaceId, slug } }),
+  mirrorAnimation: (input: { animationId: string; targetFacing: string; sourceFacing?: string; anchorSlug?: string }) => invoke<MirrorAnimationResult>("mirror_animation", { input }),
+  queueDirectionSet: (input: { workspaceId: string; worktreeId: string; sourceAnimationId: string; anchorSlug: string; motion: string; set: "4" | "8"; conversationId?: string }) => invoke<DirectionSetResult>("queue_direction_set", { input }),
+  listMotionPresets: (workspaceId: string) => invoke<MotionPresetCatalog>("list_motion_presets", { workspaceId }),
+  saveMotionPresets: (workspaceId: string, catalog: MotionPresetCatalog) => invoke<MotionPresetCatalog>("save_motion_presets", { workspaceId, catalog }),
+  queueMotionBatch: (input: { workspaceId: string; worktreeId: string; anchorSlug: string; motions?: string[]; set: "4" | "8"; conversationId?: string; hardenAfter?: boolean; seedAnimationId?: string; onlyMissing?: boolean }) => invoke<MotionBatchResult>("queue_motion_batch", { input }),
+  listDirectionMeta: (workspaceId: string, worktreeId: string) => invoke<AnimationDirectionMeta[]>("list_direction_meta", { workspaceId, worktreeId }),
+  hardenAnimation: (animationId: string, anchorSlug?: string, sourcePath?: string, frameCount?: number, conversationId?: string, options?: HardenAnimationOptions) => invoke<HardenAnimationReport>("harden_animation", { animationId, anchorSlug, sourcePath, frameCount, conversationId, options }),
+  cleanAlphaAnimation: (animationId: string) => invoke<CleanAlphaReport>("clean_alpha_animation", { animationId }),
+  snapToPixelGrid: (animationId: string, gridSize?: number) => invoke<Animation>("snap_to_pixel_grid", { animationId, gridSize }),
+  normalizeAnimation: (input: { animationId: string; anchorSlug?: string; lockFirstFrame?: boolean; sharedScale?: boolean; padding?: number }) => invoke<Animation>("normalize_animation", { input }),
+  splitSpriteStrip: (input: { workspaceId: string; sourcePath: string; layout: string; frameCount: number; columns?: number; recoverForeground?: boolean; category?: string }) => invoke<SplitStripResult>("split_sprite_strip", { input }),
+  scoreSpriteStrip: (input: { sourcePath: string; frameCount?: number; layout?: string }) => invoke<StripScoreReport>("score_sprite_strip", { input }),
+  extractVideoFrames: (input: { workspaceId: string; videoPath: string; fps?: number }) => invoke<SplitStripResult>("extract_video_frames", { input }),
+  nudgeAnimationFrames: (input: { animationId: string; deltas: { frameIndex: number; offsetX: number; offsetY: number }[]; applyToAll?: boolean }) => invoke<Animation>("nudge_animation_frames", { input }),
+  resetAnimationAlignmentOffsets: (animationId: string) => invoke<Animation>("reset_animation_alignment_offsets", { animationId }),
+  checkSizeContract: (animationId: string, anchorSlug?: string) => invoke<SizeContractReport>("check_size_contract", { animationId, anchorSlug }),
+  retrySizeContract: (input: { animationId: string; anchorSlug?: string; conversationId?: string; regenerate?: boolean; maxDeterministicPasses?: number }) => invoke<ContractRetryResult>("retry_size_contract", { input }),
+  queueContractRetry: (input: { animationId: string; conversationId: string; anchorSlug?: string; maxAiAttempts?: number; maxDeterministicPasses?: number }) => invoke<ContractRetryResult>("queue_contract_retry", { input }),
+  finalizeContractRetry: (input: { animationId: string; sourcePath: string; frameCount: number; anchorSlug?: string; layout?: string }) => invoke<ContractRetryResult>("finalize_contract_retry", { input }),
+  setAnimationReviewStatus: (animationId: string, status: "draft" | "accepted" | "rejected") => invoke<Animation>("set_animation_review_status", { animationId, status }),
 };
 
 export const assetUrl = (path: string) => convertFileSrc(path);

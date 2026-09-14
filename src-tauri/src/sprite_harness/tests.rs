@@ -38,6 +38,7 @@ fn applies_compact_roguelike_canvas_from_selected_art_direction() {
         None,
         None,
         None,
+        None,
         false,
     );
     assert!(prompt.contains("logical canvas: 16x16 pixels"));
@@ -63,6 +64,7 @@ fn paired_limb_identity_lock_targets_animated_characters_and_creatures_only() {
         Some(&generation),
         Some("animate"),
         None,
+        None,
         false,
     );
     assert!(
@@ -81,6 +83,7 @@ fn paired_limb_identity_lock_targets_animated_characters_and_creatures_only() {
         Some(&generation),
         Some("animate"),
         None,
+        None,
         false,
     );
     assert_eq!(
@@ -95,6 +98,7 @@ fn paired_limb_identity_lock_targets_animated_characters_and_creatures_only() {
         None,
         Some(&generation),
         Some("sprite"),
+        None,
         None,
         false,
     );
@@ -144,6 +148,7 @@ fn routes_terrain_tilesets_to_one_large_atlas() {
         Some(&generation),
         None,
         None,
+        None,
         false,
     );
     assert!(prompt.contains("routed harness: terrain tileset"));
@@ -162,6 +167,7 @@ fn user_request_overrides_legacy_worktree_type_context() {
             None,
             None,
             None,
+        None,
         false,
     );
 
@@ -180,6 +186,7 @@ fn animate_this_uses_selected_asset_identity_without_trusting_its_folder() {
             None,
             Some("animate"),
             None,
+        None,
         false,
     );
 
@@ -193,6 +200,7 @@ fn explicit_user_style_overrides_saved_style_context() {
     let prompt = studio_prompt(
         "make a pixel RPG character, single frame",
         Some("Selected style preset: Cozy chibi. rounded cartoon"),
+        None,
         None,
         None,
         None,
@@ -213,7 +221,7 @@ fn terrain_objects_do_not_become_tileset_atlases() {
 
 #[test]
 fn prompt_embeds_renderer_and_originality_rules() {
-    let prompt = studio_prompt("make a potion icon", None, None, None, None, false);
+    let prompt = studio_prompt("make a potion icon", None, None, None, None, None, false);
     assert!(prompt.contains(".sprite-studio/sprite_tool.py"));
     assert!(prompt.contains("WORKSPACE PYTHON RUNTIME"));
     assert!(prompt.contains("original design"));
@@ -225,6 +233,7 @@ fn routes_characters_to_imagegen_and_applies_saved_style() {
     let prompt = studio_prompt(
         "make me a character, single frame",
         Some("Selected style preset: Cozy chibi. rounded cartoon"),
+        None,
         None,
         None,
         None,
@@ -244,6 +253,7 @@ fn routes_effects_through_the_effect_harness() {
         None,
         Some("effect"),
         None,
+        None,
         false,
     );
     assert!(prompt.contains("routed harness: effect"));
@@ -256,6 +266,7 @@ fn routes_effects_through_the_effect_harness() {
 fn routes_elemental_attacks_to_the_effect_harness() {
     let prompt = studio_prompt(
         "make an ice fireball end burst with a transparent background",
+        None,
         None,
         None,
         None,
@@ -275,6 +286,7 @@ fn requires_visual_inspection_and_identity_lock_for_an_attached_master() {
         None,
         Some("animate"),
         None,
+        None,
         false,
     );
     assert!(prompt.contains("source master"));
@@ -291,6 +303,7 @@ fn routes_an_explicit_single_frame_herbalist_as_a_character() {
             None,
             None,
             None,
+        None,
         false,
     );
     assert!(prompt.contains("routed harness: character"));
@@ -323,6 +336,7 @@ fn routes_segmented_monsters_to_the_creature_rig_harness() {
         None,
         Some("animate"),
         None,
+        None,
         false,
     );
     assert!(prompt.contains("routed harness: creature"));
@@ -351,6 +365,7 @@ fn chat_profile_and_animate_command_override_inferred_defaults() {
         None,
         Some(&generation),
         Some("animate"),
+        None,
         None,
         false,
     );
@@ -387,6 +402,7 @@ fn auto_frames_choose_the_smallest_mechanically_complete_rig() {
         Some(&generation),
         Some("animate"),
         None,
+        None,
         false,
     );
     assert!(prompt.contains("Frame policy: visual motion recommendation"));
@@ -417,6 +433,7 @@ fn animated_game_objects_use_the_deterministic_rig_harness() {
         Some(&generation),
         Some("animate"),
         None,
+        None,
         false,
     );
     assert!(prompt.contains("routed harness: prop"));
@@ -433,6 +450,7 @@ fn explicit_game_object_intent_overrides_a_misfiled_character_source() {
         None,
         Some("animate"),
         None,
+        None,
         false,
     );
     assert!(prompt.contains("routed harness: terrain"));
@@ -448,6 +466,7 @@ fn pack_command_creates_static_coordinated_assets_and_manifest() {
         Some("Selected style preset: Pixel RPG"),
         None,
         Some("pack"),
+        None,
         None,
         false,
     );
@@ -467,6 +486,7 @@ fn animation_harness_requires_a_reproducible_rig_and_optional_polish() {
         Some("Context asset: assets/creatures/rabbit.png"),
         None,
         Some("animate"),
+        None,
         None,
         false,
     );
@@ -495,6 +515,7 @@ fn every_generation_embeds_one_silent_visual_retry() {
         None,
         Some("animate"),
         None,
+        None,
         false,
     );
     assert!(prompt.contains("# Internal visual acceptance loop"));
@@ -511,6 +532,7 @@ fn cursor_runs_override_imagegen_with_generate_image() {
         None,
         None,
         Some("cursor"),
+        None,
         false,
     );
     assert!(prompt.contains("CURSOR IMAGE CONTRACT"));
@@ -524,6 +546,7 @@ fn cursor_runs_override_imagegen_with_generate_image() {
         None,
         Some("pack"),
         Some("cursor"),
+        None,
         false,
     );
     assert!(pack.contains("CURSOR IMAGE CONTRACT"));
@@ -538,6 +561,7 @@ fn antigravity_runs_override_imagegen_with_generate_image() {
         None,
         None,
         Some("antigravity"),
+        None,
         false,
     );
     assert!(prompt.contains("ANTIGRAVITY IMAGE CONTRACT"));
@@ -552,6 +576,7 @@ fn antigravity_runs_override_imagegen_with_generate_image() {
         None,
         Some("pack"),
         Some("antigravity"),
+        None,
         false,
     );
     assert!(pack.contains("ANTIGRAVITY IMAGE CONTRACT"));
@@ -565,6 +590,7 @@ fn native_rig_master_only_skips_mask_rig_instructions() {
         Some("Selected art direction: Pixel RPG"),
         None,
         Some("animate"),
+        None,
         None,
         true,
     );

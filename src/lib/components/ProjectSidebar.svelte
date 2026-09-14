@@ -3,6 +3,7 @@
     Archive,
     ArchiveRestore,
     Blocks,
+    BookOpen,
     ChevronDown,
     ChevronRight,
     FolderClosed,
@@ -24,7 +25,7 @@
 
   let { workspaces, workspace, worktrees, conversations, selectedWorktreeId, selectedConversationId, runningConversationIds, activeView, onView, onProject, onAddProject, onConversation, onNewConversation, onRenameConversation, onArchiveConversation, onListArchivedConversations, onRestoreConversation, onSettings, onManageProject }: {
     workspaces:Workspace[];workspace?:Workspace;worktrees:Worktree[];conversations:Conversation[];selectedWorktreeId?:string;selectedConversationId?:string;runningConversationIds:string[];activeView:string;
-    onView:(view:"chat"|"media"|"skills"|"arts")=>void;onProject:(workspace:Workspace)=>void|Promise<void>;onAddProject:()=>void;onConversation:(conversation:Conversation)=>void|Promise<void>;onNewConversation:(worktree?:Worktree)=>void|Promise<void>;onRenameConversation:(conversation:Conversation,title:string)=>void|Promise<void>;onArchiveConversation:(conversation:Conversation)=>void|Promise<void>;onListArchivedConversations:()=>Promise<Conversation[]>;onRestoreConversation:(conversation:Conversation)=>void|Promise<void>;onSettings:()=>void;onManageProject:()=>void;
+    onView:(view:"chat"|"media"|"skills"|"arts"|"guide")=>void;onProject:(workspace:Workspace)=>void|Promise<void>;onAddProject:()=>void;onConversation:(conversation:Conversation)=>void|Promise<void>;onNewConversation:(worktree?:Worktree)=>void|Promise<void>;onRenameConversation:(conversation:Conversation,title:string)=>void|Promise<void>;onArchiveConversation:(conversation:Conversation)=>void|Promise<void>;onListArchivedConversations:()=>Promise<Conversation[]>;onRestoreConversation:(conversation:Conversation)=>void|Promise<void>;onSettings:()=>void;onManageProject:()=>void;
   }=$props();
   let expandedProjects=$state<string[]>([]);
   let renameTarget=$state<Conversation>();
@@ -33,7 +34,7 @@
   let archivedConversations=$state<Conversation[]>([]);
   let loadingArchive=$state(false);
   let restoringId=$state<string>();
-  const primary=[{id:"chat",label:"New Chat",icon:MessageCirclePlus},{id:"media",label:"Media Gallery",icon:GalleryThumbnails},{id:"skills",label:"Skills",icon:Blocks},{id:"arts",label:"Arts",icon:Paintbrush}] as const;
+  const primary=[{id:"chat",label:"New Chat",icon:MessageCirclePlus},{id:"media",label:"Media Gallery",icon:GalleryThumbnails},{id:"guide",label:"Guide",icon:BookOpen},{id:"skills",label:"Skills",icon:Blocks},{id:"arts",label:"Arts",icon:Paintbrush}] as const;
 
   $effect(()=>{if(workspace&&!expandedProjects.includes(workspace.id))expandedProjects=[...expandedProjects,workspace.id];});
   function chatsFor(worktree:Worktree){return conversations.filter(item=>item.worktreeId===worktree.id);}

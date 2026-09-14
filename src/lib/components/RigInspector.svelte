@@ -7,6 +7,7 @@
     panelTab, points, bones, frames, selectedPointId, selectedBoneId, frameIndex, selectedPoint, selectedFrame, pointKinds,
     onTab, onSelectPoint, onSelectBone, onSelectFrame, onUpdatePoint, onRemovePoint, onAddBone, onUpdateBone, onRemoveBone,
     onAddFrame, onUpdateFrame, onSetTransform, onAddContact, onUpdateContact, onRemoveContact,
+    interpolateBusy = false, onInterpolate, onRenderInBetweens,
   }: {
     panelTab: "points" | "bones" | "frames";
     points: RigPoint[];
@@ -33,7 +34,20 @@
     onAddContact: (frameIndex: number) => void;
     onUpdateContact: (frameIndex: number, index: number, patch: Partial<{ bone: string; x: number; y: number; bend: number }>) => void;
     onRemoveContact: (frameIndex: number, index: number) => void;
+    interpolateBusy?: boolean;
+    onInterpolate?: (fromIndex: number, toIndex: number, steps: number) => void;
+    onRenderInBetweens?: (fromIndex: number, toIndex: number, steps: number) => void;
   } = $props();
+
+  let interpolateFrom = $state(0);
+  let interpolateTo = $state(1);
+  let interpolateSteps = $state(2);
+
+  $effect(() => {
+    if (frames.length < 2) return;
+    interpolateFrom = Math.min(frameIndex, frames.length - 2);
+    interpolateTo = Math.min(interpolateFrom + 1, frames.length - 1);
+  });
 </script>
 
 <aside class="panel">
@@ -126,6 +140,26 @@
           {/each}
           {#if !selectedFrame.contacts.length}<p class="hint">Contacts plant a bone's end point in place with two-bone IK — feet stop sliding.</p>{/if}
         </div>
+        {#if frames.length >= 2 && (onInterpolate || onRenderInBetweens)}
+          <div class="interpolate">
+            <header><span>INTERPOLATE A→B</span></header>
+            <div class="pair">
+              <label>From<select bind:value={interpolateFrom}>{#each frames as _, index}<option value={index}>{index + 1}</option>{/each}</select></label>
+              <label>To<select bind:value={interpolateTo}>{#each frames as _, index}<option value={index}>{index + 1}</option>{/each}</select></label>
+            </div>
+            <label>Steps<input type="number" min="1" max="16" bind:value={interpolateSteps}/></label>
+            {#if onInterpolate}
+              <button class="interp-btn" disabled={interpolateBusy || interpolateFrom >= interpolateTo} onclick={() => onInterpolate?.(interpolateFrom, interpolateTo, Number(interpolateSteps))}>
+                {interpolateBusy ? "Interpolating…" : `Insert ${Math.max(0, Number(interpolateSteps) || 0)} pose frame(s)`}
+              </button>
+            {/if}
+            {#if onRenderInBetweens}
+              <button class="interp-btn render" disabled={interpolateBusy || interpolateFrom >= interpolateTo} onclick={() => onRenderInBetweens?.(interpolateFrom, interpolateTo, Number(interpolateSteps))}>
+                {interpolateBusy ? "Rendering…" : "Insert rendered in-betweens"}
+              </button>
+            {/if}
+          </div>
+        {/if}
       {:else}
         <p class="hint">Add pose frames to keyframe rotations per bone. Preview or render at any time.</p>
       {/if}
@@ -143,5 +177,6 @@
   .transform-list{border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:10px}.transform-list header,.transform-row{display:grid;grid-template-columns:minmax(0,1fr) 48px 40px 40px;gap:4px;padding:4px 6px;align-items:center}.transform-list header{background:var(--surface);font-size:8px;letter-spacing:.08em;color:var(--faint)}.transform-row{border-top:1px solid var(--border);font-size:10px;color:var(--muted)}.transform-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.transform-row input{width:100%;height:21px;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:0 3px;outline:0}
   .contacts{margin-top:12px}.contacts header{display:flex;align-items:center;justify-content:space-between;font-size:9px;letter-spacing:.1em;color:var(--faint);margin-bottom:6px}.contacts header button{height:22px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--muted);font:inherit;font-size:9px;display:flex;align-items:center;gap:4px;padding:0 6px;cursor:pointer}.contact-row{display:grid;grid-template-columns:minmax(0,1fr) 42px 42px 32px 26px;gap:4px;margin-bottom:4px}.contact-row select,.contact-row input{height:22px;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:0 3px;outline:0}
   .pair .checkbox-row{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11px}.checkbox-row input{height:auto;width:auto}
+  .interpolate{margin-top:12px;border:1px solid var(--border);border-radius:6px;padding:8px}.interpolate header{font-size:9px;letter-spacing:.1em;color:var(--faint);margin-bottom:6px}.interpolate label{display:block;font-size:9px;color:var(--faint);margin-top:6px}.interpolate input,.interpolate select{display:block;width:100%;height:22px;box-sizing:border-box;margin-top:3px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:0 4px;outline:0}.interp-btn{width:100%;height:26px;margin-top:8px;border:1px dashed var(--accent);border-radius:5px;background:transparent;color:var(--accent);font:inherit;font-size:10px;cursor:pointer}.interp-btn:hover{background:var(--accent-dim)}.interp-btn:disabled{opacity:.45;cursor:not-allowed}
   button:disabled{opacity:.4;cursor:not-allowed}
 </style>

@@ -17,6 +17,8 @@ pub struct BackgroundJob {
     pub error_message: Option<String>,
     pub cancel_requested: bool,
     pub result_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_json: Option<String>,
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -76,6 +78,7 @@ pub struct SpriteSheetInput {
     pub alignment: String,
     pub pivot_x: f64,
     pub pivot_y: f64,
+    pub metadata_format: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

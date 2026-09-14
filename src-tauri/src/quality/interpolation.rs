@@ -16,7 +16,10 @@ use std::path::Path;
 use tauri::Manager;
 use uuid::Uuid;
 
+use crate::pipeline::blit_with_offset;
+
 use super::reports::load_checks;
+use super::rig_bridge::try_render_rig_transition;
 
 pub(super) fn rebalance_motion_plan(mut plan: MotionPlan, frame_count: u32) -> MotionPlan {
     while plan.phases.len() > frame_count as usize {
@@ -81,6 +84,41 @@ pub(super) fn interpolate_rgba(first: &RgbaImage, second: &RgbaImage) -> Command
     Ok(output)
 }
 
+pub(super) fn interpolate_motion_aware_rgba(
+    first: &RgbaImage,
+    second: &RgbaImage,
+    first_offset: (i32, i32),
+    second_offset: (i32, i32),
+) -> CommandResult<RgbaImage> {
+    if first.dimensions() != second.dimensions() {
+        return Err(CommandError::new(
+            "interpolation_dimensions",
+            "Align frame dimensions before inserting a transition",
+        ));
+    }
+    let mid_offset = (
+        (first_offset.0 + second_offset.0) / 2,
+        (first_offset.1 + second_offset.1) / 2,
+    );
+    let width = first.width();
+    let height = first.height();
+    let mut aligned_first = RgbaImage::new(width, height);
+    let mut aligned_second = RgbaImage::new(width, height);
+    blit_with_offset(
+        &mut aligned_first,
+        first,
+        mid_offset.0 - first_offset.0,
+        mid_offset.1 - first_offset.1,
+    );
+    blit_with_offset(
+        &mut aligned_second,
+        second,
+        mid_offset.0 - second_offset.0,
+        mid_offset.1 - second_offset.1,
+    );
+    interpolate_rgba(&aligned_first, &aligned_second)
+}
+
 pub(super) fn interpolation_neighbors(
     index: usize,
     frame_count: usize,
@@ -123,9 +161,24 @@ fn create_interpolated_repair(
     })?;
     let first_asset = get_asset(state, &first_frame.asset_id)?;
     let second_asset = get_asset(state, &second_frame.asset_id)?;
-    let first = image::open(&first_asset.path)?.to_rgba8();
-    let second = image::open(&second_asset.path)?.to_rgba8();
-    let transition = interpolate_rgba(&first, &second)?;
+    let transition = if let Some(rig_frame) =
+        try_render_rig_transition(state, source, first_index, second_index)?
+    {
+        rig_frame
+    } else {
+        let first = image::open(&first_asset.path)?.to_rgba8();
+        let second = image::open(&second_asset.path)?.to_rgba8();
+        interpolate_motion_aware_rgba(
+            &first,
+            &second,
+            (first_frame.offset_x, first_frame.offset_y),
+            (second_frame.offset_x, second_frame.offset_y),
+        )?
+    };
+    let mid_offset = (
+        (first_frame.offset_x + second_frame.offset_x) / 2,
+        (first_frame.offset_y + second_frame.offset_y) / 2,
+    );
     let root = workspace_path(state, &source.workspace_id)?;
     std::fs::create_dir_all(output_directory)?;
     crate::allow_asset_directory(Some(app), output_directory, true)?;
@@ -146,6 +199,8 @@ fn create_interpolated_repair(
     Ok(AnimationFrame {
         asset_id: asset.id,
         duration_ms: Some(duration_ms),
+        offset_x: mid_offset.0,
+        offset_y: mid_offset.1,
     })
 }
 
@@ -182,13 +237,18 @@ fn optimize_animation_frames_inner(
             .optional()?
             .ok_or_else(|| CommandError::new("quality_report_required", "Run quality analysis before optimizing frames"))?
     };
-    let checks = {
+    let mut checks = {
         let connection = state
             .db
             .lock()
             .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
         load_checks(&connection, &report_id)?
     };
+    if let Ok(contract_report) =
+        crate::pipeline::size_contract_check_inner(state, &input.animation_id, None)
+    {
+        super::contract_bridge::merge_contract_checks(&mut checks, &contract_report.violations);
+    }
     let change_limit = input.max_changes.clamp(1, 8) as usize;
     let mut frames = source.frames.clone();
     let mut removed_frames = 0_u32;
@@ -323,6 +383,7 @@ fn optimize_animation_frames_inner(
             looping: source.looping,
             frames,
             motion_plan: Some(optimized_plan),
+            review_status: Some(source.review_status.clone()),
         },
         state,
     )?;

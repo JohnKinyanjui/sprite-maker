@@ -101,6 +101,7 @@ pub fn studio_prompt(
     generation: Option<&GenerationOptions>,
     command: Option<&str>,
     agent_provider: Option<&str>,
+    anchor_contract: Option<&str>,
     native_rig_master_only: bool,
 ) -> String {
     let context = context.unwrap_or("").trim();
@@ -329,6 +330,7 @@ pub fn studio_prompt(
          - chat quality preset: {}\n\
          - slash command: {}\n\
          - explicit user constraints always override inferred defaults\n\n\
+         {}\n\
          MOTION PHASE PLAN\n{}\n\n\
          RIG PLANNING CONTRACT\n{}\n\n\
          PAIRED-LIMB IDENTITY CONTRACT\n{}\n\n\
@@ -346,6 +348,10 @@ pub fn studio_prompt(
         brief.preset,
         generation.map(|value| value.quality.as_str()).unwrap_or("automatic"),
         command.unwrap_or("none"),
+        anchor_contract
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim())
+            .unwrap_or("CHARACTER ANCHOR CONTRACT\nNo promoted anchor exists yet. When a character master is approved, promote it with `promote_anchor` so follow-up animations inherit the same canvas and foot baseline."),
         motion_plan_text,
         rig_contract,
         limb_identity_contract,

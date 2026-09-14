@@ -17,7 +17,7 @@ pub(crate) fn load_animation_frames_from_table(
     animation_id: &str,
 ) -> CommandResult<Vec<AnimationFrame>> {
     let mut statement = connection.prepare(
-        r#"SELECT asset_id, duration_ms
+        r#"SELECT asset_id, duration_ms, offset_x, offset_y
            FROM animation_frames
            WHERE animation_id=?1
            ORDER BY position"#,
@@ -27,6 +27,8 @@ pub(crate) fn load_animation_frames_from_table(
             Ok(AnimationFrame {
                 asset_id: row.get(0)?,
                 duration_ms: row.get(1)?,
+                offset_x: row.get(2)?,
+                offset_y: row.get(3)?,
             })
         })?
         .filter_map(Result::ok)
@@ -82,8 +84,9 @@ fn animation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Animation> {
         looping: row.get(5)?,
         frames: serde_json::from_str::<Vec<AnimationFrame>>(&frames).unwrap_or_default(),
         motion_plan: None,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        review_status: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
     })
 }
 
@@ -178,7 +181,7 @@ pub(crate) fn load_animation_by_id(
         .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
     let mut animation = connection
         .query_row(
-            "SELECT id, workspace_id, worktree_id, name, fps, looping, frames_json, created_at, updated_at FROM animations WHERE id=?1",
+            "SELECT id, workspace_id, worktree_id, name, fps, looping, frames_json, review_status, created_at, updated_at FROM animations WHERE id=?1",
             [animation_id],
             animation_row,
         )
@@ -201,7 +204,7 @@ pub fn list_animations(
         .db
         .lock()
         .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
-    let select = "SELECT id, workspace_id, worktree_id, name, fps, looping, frames_json, created_at, updated_at FROM animations";
+    let select = "SELECT id, workspace_id, worktree_id, name, fps, looping, frames_json, review_status, created_at, updated_at FROM animations";
     let mut animations: Vec<Animation> = if let Some(worktree_id) = worktree_id {
         let mut statement = connection.prepare(&format!(
             "{select} WHERE workspace_id = ?1 AND worktree_id = ?2 ORDER BY updated_at DESC"
@@ -256,7 +259,11 @@ pub(crate) fn save_animation_inner(
     }
     let now = Utc::now().to_rfc3339();
     let id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-    let (existing_created_at, existing_motion_plan): (Option<String>, Option<MotionPlan>) = {
+    let (existing_created_at, existing_motion_plan, existing_review_status): (
+        Option<String>,
+        Option<MotionPlan>,
+        Option<String>,
+    ) = {
         let connection = state
             .db
             .lock()
@@ -268,9 +275,20 @@ pub(crate) fn save_animation_inner(
                 |row| row.get(0),
             )
             .optional()?;
+        let review_status = connection
+            .query_row(
+                "SELECT review_status FROM animations WHERE id = ?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()?;
         let motion_plan = load_motion_plan(&connection, &id)?;
-        (created_at, motion_plan)
+        (created_at, motion_plan, review_status)
     };
+    let review_status = input
+        .review_status
+        .or(existing_review_status)
+        .unwrap_or_else(|| "draft".to_string());
     let animation = Animation {
         id,
         workspace_id: input.workspace_id,
@@ -280,6 +298,7 @@ pub(crate) fn save_animation_inner(
         looping: input.looping,
         frames: input.frames,
         motion_plan: input.motion_plan.or(existing_motion_plan),
+        review_status,
         created_at: existing_created_at.unwrap_or_else(|| now.clone()),
         updated_at: now,
     };
@@ -305,10 +324,10 @@ pub(crate) fn save_animation_inner(
             }
         }
         transaction.execute(
-            r#"INSERT INTO animations(id, workspace_id, worktree_id, name, fps, looping, frames_json, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-            ON CONFLICT(id) DO UPDATE SET worktree_id=excluded.worktree_id, name=excluded.name, fps=excluded.fps, looping=excluded.looping, frames_json=excluded.frames_json, updated_at=excluded.updated_at"#,
-            params![animation.id, animation.workspace_id, animation.worktree_id, animation.name, animation.fps, animation.looping, frames_json, animation.created_at, animation.updated_at],
+            r#"INSERT INTO animations(id, workspace_id, worktree_id, name, fps, looping, frames_json, review_status, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(id) DO UPDATE SET worktree_id=excluded.worktree_id, name=excluded.name, fps=excluded.fps, looping=excluded.looping, frames_json=excluded.frames_json, review_status=excluded.review_status, updated_at=excluded.updated_at"#,
+            params![animation.id, animation.workspace_id, animation.worktree_id, animation.name, animation.fps, animation.looping, frames_json, animation.review_status, animation.created_at, animation.updated_at],
         )?;
         transaction.execute(
             r#"INSERT OR IGNORE INTO animation_revisions(
@@ -327,14 +346,16 @@ pub(crate) fn save_animation_inner(
         for (position, frame) in animation.frames.iter().enumerate() {
             transaction.execute(
                 r#"INSERT INTO animation_frames(
-                    id, animation_id, asset_id, position, duration_ms, created_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
+                    id, animation_id, asset_id, position, duration_ms, offset_x, offset_y, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
                 params![
                     Uuid::new_v4().to_string(),
                     animation.id,
                     frame.asset_id,
                     position as i64,
                     frame.duration_ms,
+                    frame.offset_x,
+                    frame.offset_y,
                     animation.updated_at
                 ],
             )?;
@@ -430,8 +451,16 @@ pub fn delete_animation(id: String, state: State<'_, AppState>) -> CommandResult
 }
 
 mod export;
-
+mod preview;
+pub(crate) mod export_metadata;
+#[cfg(test)]
+mod export_metadata_tests;
 pub(crate) use export::export_animation_inner;
+pub(crate) use preview::write_animation_gif;
 pub use export::{
     __cmd__export_animation, __tauri_command_name_export_animation, export_animation,
+};
+pub use preview::{
+    __cmd__export_animation_preview, __tauri_command_name_export_animation_preview,
+    export_animation_preview,
 };

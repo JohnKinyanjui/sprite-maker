@@ -9,6 +9,7 @@
   import MediaNavigation from "$lib/components/MediaNavigation.svelte";
   import SkillsLibrary from "$lib/components/SkillsLibrary.svelte";
   import ArtsLibrary from "$lib/components/ArtsLibrary.svelte";
+  import UserGuide from "$lib/components/UserGuide.svelte";
   import NoProjectView from "$lib/components/NoProjectView.svelte";
   import ConversationView from "$lib/components/ConversationView.svelte";
   import AssetBrowser from "$lib/components/AssetBrowser.svelte";
@@ -22,6 +23,7 @@
   import VfxStudio from "$lib/components/VfxStudio.svelte";
   import TestRoom from "$lib/components/TestRoom.svelte";
   import PackLibrary from "$lib/components/PackLibrary.svelte";
+  import ProductionSessionsGallery from "$lib/components/ProductionSessionsGallery.svelte";
   import MotionPromptDialog from "$lib/components/MotionPromptDialog.svelte";
   import SettingsModal from "$lib/components/SettingsModal.svelte";
   import WorktreeDialog from "$lib/components/WorktreeDialog.svelte";
@@ -113,13 +115,19 @@
   const currentProvider = $derived(providers.find(provider => provider.id === (selectedConversation?.provider ?? "codex")));
   const imageProviders = $derived(providers.filter(provider=>provider.kind==="image"));
   const currentRequest = $derived(selectedConversation ? runningRequests[selectedConversation.id] : undefined);
-  function linkedAnimationNameForRig(rigId: string): string | undefined {
+  function linkedAnimationForRig(rigId: string): Animation | undefined {
     if (!generationManifest?.rigId || generationManifest.rigId !== rigId) return undefined;
     const manifestPaths = new Set(generationManifest.files.map(normalizeManifestPath));
     return animations.find(animation => {
       const paths = animationFrameAssets(animation, assets).map(asset => normalizeManifestPath(asset.relativePath));
       return paths.length > 0 && paths.every(path => manifestPaths.has(path));
-    })?.name;
+    });
+  }
+  function linkedAnimationNameForRig(rigId: string): string | undefined {
+    return linkedAnimationForRig(rigId)?.name;
+  }
+  function linkedAnimationIdForRig(rigId: string): string | undefined {
+    return linkedAnimationForRig(rigId)?.id;
   }
   const currentActivity = $derived(selectedConversation ? activityByConversation[selectedConversation.id] ?? [] : []);
   const runningConversationIds = $derived(Object.keys(runningRequests));
@@ -128,7 +136,19 @@
   const visibleAssets = $derived(selectedWorktree?.kind === "general" || !selectedWorktree ? assets : assets.filter(asset => worktreeAssetIds.includes(asset.id) || animationAssetIds.has(asset.id)));
   const visiblePacks = $derived(packs.filter(pack => pack.files.some(file => visibleAssets.some(asset => asset.relativePath === file))));
   const spriteCount = $derived(buildSpriteGroups(visibleAssets, animations).length);
-  const mediaTabs=["sprites","references","animate","rig","terrain","vfx","sheets","packs","play"];
+  let sessionCount = $state(0);
+  async function refreshSessionCount() {
+    if (!workspace) { sessionCount = 0; return; }
+    try {
+      sessionCount = (await api.listGenerationSessions(workspace.id, activeWorktreeId())).length;
+    } catch {
+      sessionCount = 0;
+    }
+  }
+  $effect(() => {
+    if (workspace) void refreshSessionCount();
+  });
+  const mediaTabs=["sprites","references","animate","rig","sessions","terrain","vfx","sheets","packs","play"];
   const activePrimary=$derived(activeTab==="chat"?"chat":mediaTabs.includes(activeTab)?"media":activeTab);
   function activeWorktreeId(){return worktreeQueryId(selectedWorktree);}
   function generationOptions(){return generationRequestFromProfile(generationProfile);}
@@ -350,7 +370,7 @@
     catch(error){notify(errorMessage(error),"error");}
   }
   function selectTab(value:string){activeTab=value;}
-  function selectPrimary(value:"chat"|"media"|"skills"|"arts"){if(value==="chat"){activeTab="chat";return;}if(value==="media"){activeTab=mediaTabs.includes(activeTab)?activeTab:"sprites";return;}activeTab=value;}
+  function selectPrimary(value:"chat"|"media"|"skills"|"arts"|"guide"){if(value==="chat"){activeTab="chat";return;}if(value==="media"){activeTab=mediaTabs.includes(activeTab)?activeTab:"sprites";return;}activeTab=value;}
   function selectAsset(asset:Asset){selectedAsset=asset;}
   function viewPack(pack:AssetPack){selectedPackId=pack.id;selectedAsset=undefined;viewedAsset=undefined;activeTab="packs";}
   function openPackFromChat(pack:AssetPack){viewPack(pack);}
@@ -582,17 +602,19 @@
     <ProjectSidebar {workspaces} {workspace} {worktrees} conversations={sidebarConversations} selectedWorktreeId={selectedWorktree?.id} selectedConversationId={selectedConversation?.id} {runningConversationIds} activeView={activePrimary} onView={selectPrimary} onProject={loadWorkspace} onAddProject={()=>projectDialogOpen=true} onConversation={chooseConversation} onNewConversation={newConversation} onRenameConversation={renameChat} onArchiveConversation={archiveChat} onListArchivedConversations={listArchivedChats} onRestoreConversation={restoreArchivedChat} onSettings={()=>settingsOpen=true} onManageProject={()=>{if(workspace){renameValue=workspace.name;workspaceMenu=true;}}}/>
     <section class="main-pane">
       <div class="tab-stack">
-        {#if activeTab==="skills"}<SkillsLibrary skills={customSkills} onChange={saveCustomSkills}/>
+        {#if activeTab==="guide"}<UserGuide/>
+        {:else if activeTab==="skills"}<SkillsLibrary skills={customSkills} onChange={saveCustomSkills}/>
         {:else if activeTab==="arts"}<ArtsLibrary arts={customArts} selected={workspaceStyle} onChange={saveCustomArts} onSelect={changeWorkspaceStyle}/>
         {:else if !workspace}<NoProjectView onAdd={()=>projectDialogOpen=true}/>
         {:else if activeTab==="chat"}
           {#key selectedConversation?.id}<ConversationView conversation={selectedConversation} {messages} provider={currentProvider} availableProviders={providers} {imageProviders} customStyles={customArts} runningRequestId={currentRequest?.id} generationStartedAt={currentRequest?.startedAt} generationRequest={currentRequest} activity={currentActivity} {selectedAsset} {assets} {animations} packs={visiblePacks} {references} {activeReferenceIds} {focusedReferenceId} draftPrompt={chatDraft} onDraftConsumed={()=>chatDraft=""} workspacePath={workspace.path} {workspaceStyle} {conversationStyle} animationMode={conversationAnimationMode} {generationProfile} onSend={send} onCancel={cancel} onClearAsset={()=>selectedAsset=undefined} onEditAsset={editAssetFromChat} onEditAnimation={editAnimationFromChat} onViewPack={openPackFromChat} onExportAsset={exportAssetFromChat} onExportAnimation={exportAnimationFromChat} onConversationStyle={changeConversationStyle} onAnimationMode={changeConversationAnimationMode} onGenerationProfile={changeGenerationProfile} onProviderSwitch={changeConversationProvider} onAttachReferencePaths={attachReferencePaths} onAttachReferenceFiles={attachReferenceFiles} onFocusReference={focusConversationReference} onRemoveReference={removeConversationReference} onLinkError={(message)=>notify(message,"error")}/>{/key}
         {:else}
-          <div class="media-view"><MediaNavigation active={activeTab} counts={{sprites:spriteCount,references:references.length,animate:animations.length,rigs:rigs.length,packs:visiblePacks.length}} onSelect={selectTab}/><div class="media-content">
+          <div class="media-view"><MediaNavigation active={activeTab} counts={{sprites:spriteCount,references:references.length,animate:animations.length,rigs:rigs.length,packs:visiblePacks.length,sessions:sessionCount}} onSelect={selectTab}/><div class="media-content">
             {#if activeTab==="sprites"}<AssetBrowser workspaceId={workspace.id} worktreeId={selectedWorktree?.id} assets={visibleAssets} {animations} packs={visiblePacks} packId={packFilter} selectedAssetId={selectedAsset?.id} onAssets={(value)=>assets=value} onSelect={selectAsset} onOpen={openSpriteGroup} onPack={(value)=>packFilter=value} onLinked={async()=>{if(selectedWorktree)worktreeAssetIds=await api.listWorktreeAssetIds(selectedWorktree.id)}} onError={(message)=>notify(message,"error")}/>
             {:else if activeTab==="references"&&selectedWorktree}<ReferenceLibrary worktreeId={selectedWorktree.id} conversationId={selectedConversation?.id} {references} activeIds={activeReferenceIds} maximumActive={currentProvider?.capabilities.maximumReferenceImages ?? 0} onReferences={(value)=>references=value} onActiveIds={(value)=>activeReferenceIds=value} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
-            {:else if activeTab==="animate"}<AnimationEditor workspaceId={workspace.id} workspacePath={workspace.path} worktreeId={activeWorktreeId()} assets={visibleAssets} {animations} templates={animationTemplates} {selectedAnimation} linkedRigId={selectedRigId} active onAnimations={(value)=>animations=value} onAssetsRefresh={async()=>{if(workspace)assets=await api.scanAssets(workspace.id);}} onTemplates={(value)=>animationTemplates=value} onSelected={(value)=>selectedAnimation=value} onOpenRig={(rigId)=>{selectedRigId=rigId;activeTab="rig";}} onTemplateApplication={prepareTemplateInChat} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
-            {:else if activeTab==="rig"}<RigEditor workspaceId={workspace.id} worktreeId={activeWorktreeId()} assets={assets} {rigs} {providers} {selectedRigId} linkedAnimationNameForRig={linkedAnimationNameForRig} initialAssetId={rigDraftAssetId} onRigs={(value)=>rigs=value} onSelected={(id)=>{selectedRigId=id;rigDraftAssetId=undefined;}} onRendered={rigRendered} onPolish={prepareRigPolishInChat} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
+            {:else if activeTab==="animate"}<AnimationEditor workspaceId={workspace.id} workspacePath={workspace.path} worktreeId={activeWorktreeId()} conversationId={selectedConversation?.id} assets={visibleAssets} {animations} templates={animationTemplates} {selectedAnimation} linkedRigId={selectedRigId} active onAnimations={(value)=>animations=value} onAssetsRefresh={async()=>{if(workspace)assets=await api.scanAssets(workspace.id);}} onTemplates={(value)=>animationTemplates=value} onSelected={(value)=>selectedAnimation=value} onOpenRig={(rigId)=>{selectedRigId=rigId;activeTab="rig";}} onTemplateApplication={prepareTemplateInChat} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
+            {:else if activeTab==="rig"}<RigEditor workspaceId={workspace.id} worktreeId={activeWorktreeId()} assets={assets} {rigs} {providers} {selectedRigId} linkedAnimationNameForRig={linkedAnimationNameForRig} linkedAnimationIdForRig={linkedAnimationIdForRig} initialAssetId={rigDraftAssetId} onRigs={(value)=>rigs=value} onSelected={(id)=>{selectedRigId=id;rigDraftAssetId=undefined;}} onRendered={rigRendered} onPolish={prepareRigPolishInChat} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
+            {:else if activeTab==="sessions"&&workspace}<ProductionSessionsGallery workspaceId={workspace.id} worktreeId={activeWorktreeId()} {animations} onOpenAnimation={(animationId)=>{selectedAnimation=animations.find(animation=>animation.id===animationId);activeTab="animate";}} onError={(message)=>notify(message,"error")}/>
             {:else if activeTab==="terrain"&&selectedWorktree}<TerrainStudio workspaceId={workspace.id} worktreeId={selectedWorktree.id} assets={visibleAssets} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
             {:else if activeTab==="vfx"&&selectedWorktree}<VfxStudio workspaceId={workspace.id} worktreeId={selectedWorktree.id} {animations} assets={visibleAssets} active onCreated={refreshVfxAssets} onOpenSheets={openVfxSheet} onGenerate={generateVfxFromStudio} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
             {:else if activeTab==="sheets"}<SpriteSheetStudio workspaceId={workspace.id} worktreeId={activeWorktreeId()} {animations} assets={visibleAssets} active onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message)}/>
@@ -602,7 +624,7 @@
         {/if}
       </div>
     </section>
-    {#if selectedAsset && activeTab==="sprites"}<AssetInspector asset={selectedAsset} {animations} onClose={()=>selectedAsset=undefined} onChanged={updateAsset} onDeleted={assetDeleted} onError={(message)=>notify(message,"error")}/>{/if}
+    {#if selectedAsset && activeTab==="sprites" && workspace}<AssetInspector asset={selectedAsset} workspaceId={workspace.id} {animations} onClose={()=>selectedAsset=undefined} onChanged={updateAsset} onDeleted={assetDeleted} onError={(message)=>notify(message,"error")} onNotice={(message)=>notify(message,"notice")}/>{/if}
   </main>
 {/if}
 

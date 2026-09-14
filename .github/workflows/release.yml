@@ -48,6 +48,15 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
+      - name: Download bundled ffmpeg
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1
+          else
+            bash scripts/fetch-ffmpeg.sh
+          fi
+
       - name: Build and publish installers
         uses: tauri-apps/tauri-action@v1
         env:

@@ -181,6 +181,14 @@ pub struct GenerationManifest {
     pub source: Option<String>,
     #[serde(default)]
     pub quality: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facing: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrored_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_slug: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

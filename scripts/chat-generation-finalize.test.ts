@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendAssistantDelta, applyAnimationPolishModeToPrompt, buildFullRedrawPrompt, buildMotionPrompt, chatActivityLines, generationViewHandoff, inferChatCommand,
-  isFreshGenerationManifest, isRejectedStaticAnimation, orderedGenerationAssets, parallelGenerationsInWorkspace, stripFrameSuffix,
-  unacceptedGenerationNotice,
+  isFreshGenerationManifest, isRejectedStaticAnimation, mergeAssistantGenerationMetadata, orderedGenerationAssets,
+  parallelGenerationsInWorkspace, spriteCardForOrderedAssets, stripFrameSuffix, unacceptedGenerationNotice,
 } from "../src/lib/chat-generation-finalize";
 import { normalizeGenerationProfile } from "../src/lib/generation-profiles";
 import type { Asset, Message } from "../src/lib/types";
@@ -95,6 +95,17 @@ describe("chat generation finalize", () => {
     expect(prompt).toContain("/animate Use assets/hero.png");
     expect(prompt).toContain("8 frames");
     expect(prompt).toContain("Polish mode: Rig only");
+  });
+
+  test("merges sprite and pack cards onto assistant metadata without dropping either", () => {
+    const ordered = [asset("a1", "walk_01"), asset("a2", "walk_02")];
+    const spriteCard = spriteCardForOrderedAssets(ordered, 8, "anim-1");
+    const merged = mergeAssistantGenerationMetadata(
+      { generation: { kind: "sprite-generation", name: "stale", category: "creatures", fps: 1, assetIds: ["old"] } },
+      { generation: spriteCard, packGeneration: { kind: "pack-generation", packId: "forest-pack" } },
+    );
+    expect(merged.generation).toEqual(spriteCard);
+    expect(merged.packGeneration).toEqual({ kind: "pack-generation", packId: "forest-pack" });
   });
 
   test("appends streamed tokens onto the running assistant message", () => {

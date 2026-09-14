@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { Bone, Check, Clapperboard, Plus, Save, Sparkles, Trash2, Wand2 } from "lucide-svelte";
   import { api } from "$lib/api";
   import RigInspector from "$lib/components/RigInspector.svelte";
@@ -10,11 +12,11 @@
     setTransform as draftSetTransform, updateBone as draftUpdateBone, updateContact as draftUpdateContact,
     updateFrame as draftUpdateFrame, updatePoint as draftUpdatePoint,
   } from "$lib/rig-draft";
-  import { errorMessage, RIG_MORPHOLOGIES, type Animation, type Asset, type ProviderStatus, type Rig, type RigBone, type RigFitReport, type RigFrame, type RigMorphology, type RigPoint, type RigPointKind, type RigSuggestion } from "$lib/types";
+  import { errorMessage, RIG_MORPHOLOGIES, type Animation, type Asset, type JobEvent, type ProviderStatus, type Rig, type RigBone, type RigFitReport, type RigFrame, type RigMorphology, type RigPoint, type RigPointKind, type RigSuggestion } from "$lib/types";
 
-  let { workspaceId, worktreeId, assets, rigs, providers, selectedRigId, linkedAnimationNameForRig, initialAssetId, onRigs, onSelected, onRendered, onPolish, onError, onNotice }: {
+  let { workspaceId, worktreeId, assets, rigs, providers, selectedRigId, linkedAnimationNameForRig, linkedAnimationIdForRig, initialAssetId, onRigs, onSelected, onRendered, onPolish, onError, onNotice }: {
     workspaceId: string; worktreeId?: string; assets: Asset[]; rigs: Rig[]; providers: ProviderStatus[]; selectedRigId?: string;
-    linkedAnimationNameForRig?: (rigId: string) => string | undefined; initialAssetId?: string; onRigs: (rigs: Rig[]) => void; onSelected: (id?: string) => void;
+    linkedAnimationNameForRig?: (rigId: string) => string | undefined; linkedAnimationIdForRig?: (rigId: string) => string | undefined; initialAssetId?: string; onRigs: (rigs: Rig[]) => void; onSelected: (id?: string) => void;
     onRendered: (animation: Animation, assetIds: string[]) => void;
     onPolish: (animation: Animation, assetIds: string[]) => void; onError: (message: string) => void; onNotice: (message: string) => void;
   } = $props();
@@ -50,6 +52,22 @@
   const nextId = (prefix: string) => `${prefix}_${Date.now().toString(36)}_${++idCounter}`;
   let fit = $state<RigFitReport>();
   let fitBusy = $state(false);
+  let interpolateBusy = $state(false);
+  let pendingInterpolateJob = $state<{ jobId: string; animationId: string; fromIndex: number; insertedCount: number } | undefined>();
+
+  async function reloadInterpolatedAnimation(animationId: string, assetIds: string[], fromIndex: number, insertedCount: number) {
+    const animations = await api.listAnimations(workspaceId, worktreeId);
+    const animation = animations.find(item => item.id === animationId);
+    if (!animation) {
+      onError("Animazione collegata non trovata dopo l'inserimento degli in-between");
+      return;
+    }
+    const linkedIds = assetIds.length
+      ? assetIds
+      : animation.frames.slice(fromIndex + 1, fromIndex + 1 + insertedCount).map(frame => frame.assetId);
+    await refreshRigs();
+    onRendered(animation, linkedIds);
+  }
 
   const masterAsset = $derived(assets.find(asset => asset.id === masterAssetId));
   const agentProviders = $derived(providers.filter(provider => provider.kind === "agent" && ["ready", "detected"].includes(provider.status)));
@@ -198,6 +216,92 @@
     try { warnings = await api.validateRigSpec(currentInput(draftSnapshot())); const result = await api.renderRigAnimation(currentInput(draftSnapshot())); await refreshRigs(); onRendered(result.animation, result.assetIds); }
     catch (error) { onError(errorMessage(error)); } finally { rendering = false; }
   }
+  async function renderAnimationInBetweens(fromIndex: number, toIndex: number, steps: number) {
+    const animationId = rigId ? linkedAnimationIdForRig?.(rigId) : undefined;
+    if (!animationId) {
+      onError("Collega il rig a una animazione prima di inserire in-between renderizzati");
+      return;
+    }
+    interpolateBusy = true;
+    try {
+      const result = await api.interpolateRigAnimationFrames({
+        rig: currentInput(draftSnapshot()),
+        fromIndex,
+        toIndex,
+        steps,
+        animationId,
+        workspaceId,
+        worktreeId,
+      });
+      if (result.jobId) {
+        pendingInterpolateJob = {
+          jobId: result.jobId,
+          animationId,
+          fromIndex,
+          insertedCount: steps,
+        };
+        onNotice(`In-between render accodati (job ${result.jobId})`);
+      } else {
+        await reloadInterpolatedAnimation(animationId, result.assetIds, fromIndex, result.insertedCount);
+      }
+    } catch (error) {
+      onError(errorMessage(error));
+    } finally {
+      interpolateBusy = false;
+    }
+  }
+  onMount(() => {
+    const unlistenPromise = listen<JobEvent>("job-event", async ({ payload }) => {
+      const pending = pendingInterpolateJob;
+      if (!pending || payload.job.kind !== "rig_interpolate_render" || payload.job.id !== pending.jobId) return;
+      if (payload.job.status === "completed") {
+        pendingInterpolateJob = undefined;
+        await reloadInterpolatedAnimation(
+          pending.animationId,
+          [],
+          pending.fromIndex,
+          pending.insertedCount,
+        );
+      }
+      if (payload.job.status === "failed") {
+        pendingInterpolateJob = undefined;
+        onError(payload.job.errorMessage ?? "Rendered in-between job failed");
+      }
+      if (payload.job.status === "cancelled") {
+        pendingInterpolateJob = undefined;
+        onNotice("Rendered in-between job cancelled");
+      }
+    });
+    return () => {
+      void unlistenPromise.then(unlisten => unlisten());
+    };
+  });
+
+  async function interpolateKeyframes(fromIndex: number, toIndex: number, steps: number) {
+    if (!masterAsset || fromIndex >= toIndex) {
+      onError("Choose two pose frames where A comes before B");
+      return;
+    }
+    interpolateBusy = true;
+    try {
+      const result = await api.interpolateRigFrames({
+        rig: currentInput(draftSnapshot()),
+        fromIndex,
+        toIndex,
+        steps,
+      });
+      frames = result.frames;
+      frameIndex = fromIndex + 1;
+      previewPaths = result.previewPaths;
+      previewIndex = 0;
+      onNotice(`Inserted ${result.insertedCount} interpolated pose frame(s) between ${fromIndex + 1} and ${toIndex + 1}`);
+    } catch (error) {
+      onError(errorMessage(error));
+    } finally {
+      interpolateBusy = false;
+    }
+  }
+
   async function polishWithAi() {
     if (!masterAsset || !bones.length) { onError("Add at least one bone before polishing"); return; }
     rendering = true;
@@ -254,7 +358,7 @@
       {#if warnings.length}<div class="warnings">{#each warnings as warning}<p title={warning}>{warning}</p>{/each}</div>{/if}
     </aside>
     <RigStage {masterAsset} {bones} {points} {suggestion} {selectedPointId} {scale} {stageImage} {playing} {previewPaths} {previewIndex} {previewBusy} {rendering} {suggesting} {aiBusy} {agentProviders} {aiProviderId} {aiMotion} onAddPoint={addPointAt} onUpdatePoint={updatePoint} onSelectPoint={(id) => selectedPointId = id} onSuggestion={(value) => suggestion = value} onScale={(value) => scale = value} onPreview={preview} onTogglePlay={() => playing = !playing} onAutoSuggest={autoSuggest} onAiSuggest={aiSuggest} onAiProvider={(id) => aiProviderId = id} onAiMotion={(value) => aiMotion = value} onApplySuggestion={applySuggestion} onDismissSuggestion={dismissSuggestion}/>
-    <RigInspector {panelTab} {points} {bones} {frames} {selectedPointId} {selectedBoneId} {frameIndex} {selectedPoint} {selectedFrame} {pointKinds} onTab={(tab) => panelTab = tab} onSelectPoint={(id) => selectedPointId = id} onSelectBone={(id) => selectedBoneId = id} onSelectFrame={(index) => frameIndex = index} onUpdatePoint={updatePoint} onRemovePoint={removePoint} onAddBone={addBone} onUpdateBone={updateBone} onRemoveBone={removeBone} onAddFrame={addFrame} onUpdateFrame={updateFrame} onSetTransform={setTransform} onAddContact={addContact} onUpdateContact={updateContact} onRemoveContact={removeContact}/>
+    <RigInspector {panelTab} {points} {bones} {frames} {selectedPointId} {selectedBoneId} {frameIndex} {selectedPoint} {selectedFrame} {pointKinds} {interpolateBusy} onTab={(tab) => panelTab = tab} onSelectPoint={(id) => selectedPointId = id} onSelectBone={(id) => selectedBoneId = id} onSelectFrame={(index) => frameIndex = index} onUpdatePoint={updatePoint} onRemovePoint={removePoint} onAddBone={addBone} onUpdateBone={updateBone} onRemoveBone={removeBone} onAddFrame={addFrame} onUpdateFrame={updateFrame} onSetTransform={setTransform} onAddContact={addContact} onUpdateContact={updateContact} onRemoveContact={removeContact} onInterpolate={interpolateKeyframes} onRenderInBetweens={renderAnimationInBetweens}/>
   </div>
 </section>
 

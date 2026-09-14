@@ -9,7 +9,7 @@ use rusqlite::{params, OptionalExtension};
 use std::path::{Path, PathBuf};
 use tauri::State;
 
-use super::inspect::{content_hash, get_asset, inspect, upsert};
+use super::inspect::{content_hash, get_asset, inspect, safe_category, upsert};
 use super::pixel_normalize::normalize_sprite_file;
 
 fn image_paths(directory: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
@@ -146,6 +146,7 @@ pub(crate) fn export_asset_inner(id: &str, state: &AppState) -> CommandResult<Ex
         metadata_path: metadata_path.to_string_lossy().into_owned(),
         width: asset.width,
         height: asset.height,
+        format: "asset".into(),
     })
 }
 
@@ -255,6 +256,163 @@ pub(super) fn generation_fingerprint(
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+fn png_paths(directory: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            png_paths(&path, output)?;
+        } else if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+        {
+            output.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn newest_png_under(directory: &Path) -> std::io::Result<Option<PathBuf>> {
+    if !directory.is_dir() {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    png_paths(directory, &mut candidates)?;
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    candidates.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+    Ok(candidates.last().cloned())
+}
+
+fn materialize_recovered_asset(root: &Path, source: &Path) -> CommandResult<(String, String)> {
+    let source_relative = match source.strip_prefix(root) {
+        Ok(path) => path.to_string_lossy().replace('\\', "/"),
+        Err(_) => {
+            return Err(CommandError::new(
+                "invalid_generation",
+                "Asset path escapes workspace",
+            ));
+        }
+    };
+    if source_relative.starts_with("assets/") {
+        let category = source_relative
+            .split('/')
+            .nth(1)
+            .unwrap_or("characters")
+            .to_string();
+        return Ok((source_relative, safe_category(&category)?));
+    }
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CommandError::new("invalid_generation", "Recovered PNG has no file name"))?;
+    let category = safe_category("characters")?;
+    let destination = root.join("assets").join(&category).join(file_name);
+    std::fs::create_dir_all(
+        destination
+            .parent()
+            .ok_or_else(|| CommandError::new("invalid_generation", "Recovered asset has no parent"))?,
+    )?;
+    std::fs::copy(source, &destination)?;
+    let asset_relative = match destination.strip_prefix(root) {
+        Ok(path) => path.to_string_lossy().replace('\\', "/"),
+        Err(_) => {
+            return Err(CommandError::new(
+                "invalid_generation",
+                "Recovered asset path escapes workspace",
+            ));
+        }
+    };
+    Ok((asset_relative, category))
+}
+
+pub(crate) fn recover_manifest_from_imagegen_sources(
+    root: &Path,
+) -> CommandResult<Option<GenerationManifest>> {
+    let imagegen_root = root.join(".sprite-studio/imagegen-sources");
+    let (source, source_relative) = if let Some(imagegen_png) = newest_png_under(&imagegen_root)
+        .map_err(|error| CommandError::new("filesystem_error", error.to_string()))?
+    {
+        let source_relative = match imagegen_png.strip_prefix(root) {
+            Ok(path) => path.to_string_lossy().replace('\\', "/"),
+            Err(_) => {
+                return Err(CommandError::new(
+                    "invalid_generation",
+                    "ImageGen source escapes workspace",
+                ));
+            }
+        };
+        (imagegen_png, source_relative)
+    } else {
+        let assets_root = root.join("assets");
+        let asset_png = newest_png_under(&assets_root)
+            .map_err(|error| CommandError::new("filesystem_error", error.to_string()))?;
+        match asset_png {
+            Some(path) => {
+                let relative = match path.strip_prefix(root) {
+                    Ok(value) => value.to_string_lossy().replace('\\', "/"),
+                    Err(_) => {
+                        return Err(CommandError::new(
+                            "invalid_generation",
+                            "Asset path escapes workspace",
+                        ));
+                    }
+                };
+                (path, relative)
+            }
+            None => return Ok(None),
+        }
+    };
+    let (asset_relative, category) = materialize_recovered_asset(root, &source)?;
+    let name = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("sprite")
+        .to_string();
+    let manifest = GenerationManifest {
+        kind: Some("sprite".into()),
+        name,
+        category,
+        fps: 1.0,
+        files: vec![asset_relative],
+        generated_at: Utc::now().to_rfc3339(),
+        rig: None,
+        rig_id: None,
+        source: Some(source_relative),
+        quality: None,
+        direction_family: None,
+        facing: None,
+        mirrored_from: None,
+        anchor_slug: None,
+    };
+    write_generation_manifest(root, &manifest, None)?;
+    Ok(Some(manifest))
+}
+
+pub(crate) fn write_generation_manifest(
+    root: &Path,
+    manifest: &GenerationManifest,
+    session: Option<&crate::pipeline::ManifestSessionHook>,
+) -> CommandResult<()> {
+    let directory = root.join(".sprite-studio");
+    std::fs::create_dir_all(&directory)?;
+    std::fs::write(
+        directory.join("last-generation.json"),
+        serde_json::to_vec_pretty(manifest)
+            .map_err(|error| CommandError::new("serialization_error", error.to_string()))?,
+    )?;
+    if let Some(hook) = session {
+        crate::pipeline::append_session_from_manifest(root, manifest, hook)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn read_generation_manifest(root: &Path) -> CommandResult<Option<GenerationManifest>> {
     let path = root.join(".sprite-studio/last-generation.json");
     if !path.is_file() {
@@ -298,21 +456,27 @@ pub(crate) fn read_generation_manifest(root: &Path) -> CommandResult<Option<Gene
 #[tauri::command]
 pub fn scan_generation_assets(
     workspace_id: String,
+    worktree_id: Option<String>,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<Asset>> {
-    scan_generation_assets_inner(&workspace_id, Some(&app), &state)
+    scan_generation_assets_inner(&workspace_id, worktree_id.as_deref(), Some(&app), &state)
 }
 
 pub(crate) fn scan_generation_assets_inner(
     workspace_id: &str,
+    worktree_id: Option<&str>,
     app: Option<&tauri::AppHandle>,
     state: &AppState,
 ) -> CommandResult<Vec<Asset>> {
     let root = workspace_path(state, workspace_id)?;
     let assets_root = root.join("assets");
     crate::allow_asset_directory(app, &assets_root, true)?;
-    let Some(manifest) = read_generation_manifest(&root)? else {
+    let manifest = match read_generation_manifest(&root)? {
+        Some(manifest) => Some(manifest),
+        None => recover_manifest_from_imagegen_sources(&root)?,
+    };
+    let Some(manifest) = manifest else {
         return Ok(Vec::new());
     };
     let existing_ids = {
@@ -334,7 +498,7 @@ pub(crate) fn scan_generation_assets_inner(
         .map(|relative| root.join(relative))
         .filter(|path| path.is_file());
     let mut generated = Vec::with_capacity(manifest.files.len());
-    for relative in manifest.files {
+    for relative in &manifest.files {
         let path = root.join(relative);
         if path.extension().and_then(|value| value.to_str()) == Some("png") {
             normalize_sprite_file(&path, master_path.as_deref())?;
@@ -343,6 +507,24 @@ pub(crate) fn scan_generation_assets_inner(
         let asset = inspect(workspace_id, &root, &path, existing_id)?;
         upsert(state, &asset, "generated")?;
         generated.push(asset);
+    }
+    if !generated.is_empty() {
+        if let Some(worktree_id) = worktree_id {
+            let kind = manifest
+                .kind
+                .clone()
+                .unwrap_or_else(|| "generation".into());
+            crate::pipeline::append_session_from_manifest(
+                &root,
+                &manifest,
+                &crate::pipeline::ManifestSessionHook {
+                    worktree_id: worktree_id.to_string(),
+                    kind,
+                    animation_id: None,
+                    score: None,
+                },
+            )?;
+        }
     }
     Ok(generated)
 }

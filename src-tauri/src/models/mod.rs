@@ -1,11 +1,13 @@
 mod generation;
 mod jobs;
 mod media;
+mod pipeline;
 mod project;
 
 pub use generation::*;
 pub use jobs::*;
 pub use media::*;
+pub use pipeline::*;
 pub use project::*;
 
 #[cfg(test)]

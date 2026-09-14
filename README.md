@@ -11,8 +11,43 @@
 </p>
 
 <p align="center">
+  <a href="docs/en/user-guide.md">English guide</a> · <a href="docs/it/guida-utente.md">Guida italiana</a> · <strong>in-app: sidebar → Guide</strong>
+</p>
+
+<p align="center">
   <img src="docs/media/sprite-studio-v0.2-showcase.gif" alt="Sprite Studio creating a rabbit hop, dragon flight, centipede crawl, and coordinated nature pack" width="800">
 </p>
+
+## Documentation
+
+| Language | File |
+| --- | --- |
+| English | [docs/en/user-guide.md](docs/en/user-guide.md) |
+| Italiano | [docs/it/guida-utente.md](docs/it/guida-utente.md) |
+
+The same content ships inside the desktop app (**Guide** in the left sidebar, with EN/IT toggle). See [docs/README.md](docs/README.md) for the index.
+
+### Prompt best practices (summary)
+
+1. **Name what matters** — subject, action, canvas size, transparent background, style, and frame policy (Auto unless you need an exact count).
+2. **One master, then motion** — approve a character master, promote it as anchor, then animate or import a strip.
+3. **Strip-first for locomotion** — one horizontal AI strip beats eight independent frames; split, normalize, and align in the Animate tab.
+4. **Use references on purpose** — one identity reference; style refs for palette and lighting, not protected characters.
+5. **Default to native rig** — `/animate` with the rig renderer is deterministic and free per frame; opt into AI polish only when needed.
+6. **Pass the size contract** — normalize to anchor, nudge in the aligner, **Accept**, then export.
+
+Full workflows, MCP steps, and common mistakes are in the user guides above.
+
+### Best practice per i prompt (sintesi — IT)
+
+1. **Specifica ciò che conta** — soggetto, azione, dimensioni canvas, sfondo trasparente, stile e policy frame (Auto salvo conteggio esatto).
+2. **Prima il master, poi il movimento** — approva il master, promuovilo come anchor, poi anima o importa una strip.
+3. **Strip orizzontale per locomozione** — una strip AI batte otto frame indipendenti; split, normalize e align nella scheda Animate.
+4. **Riferimenti mirati** — un riferimento identità; stile per palette e luce, non personaggi protetti.
+5. **Rig nativo di default** — `/animate` con render Rust è deterministico; AI polish solo se serve.
+6. **Supera il size contract** — normalize, aligner, **Accept**, poi export.
+
+Guida completa: [docs/it/guida-utente.md](docs/it/guida-utente.md) · nell'app: sidebar → **Guide** → Italiano.
 
 ## From a prompt to a usable game asset
 
@@ -29,7 +64,8 @@ The project is open source, local first, and built with Tauri, Svelte, Rust, SQL
 3. **Describe natural movement.** “Animate this” brings the source asset back to chat and asks how it should move, with suggestions based on visible anatomy.
 4. **Plan once, generate sequentially.** AI plans the complete motion, then generates one frame at a time using the source identity and neighboring accepted frames. The default 24–48 frame range favors smooth motion; users can lower it at any time.
 5. **Rig it with points when you want determinism.** The Rig editor places named joint points and capsule bones on any sprite — auto-placed from an anatomy template, suggested by the AI (`/rig` or “Ask AI”), or dragged by hand. The native Rust engine derives every bone's pixels from the capsules, solves planted contacts with two-bone IK, and renders byte-identical frames with no image generation at all.
-6. **Test and export.** Scrub, retime, zoom, inspect warnings, test the loop in the playground, and export a PNG sheet plus metadata.
+6. **Harden for production.** Promote a character anchor, normalize frames to the anchor contract, nudge alignment metadata, accept the animation, then export.
+7. **Test and export.** Scrub, retime, zoom, inspect warnings, test the loop in the playground, and export a PNG sheet plus metadata.
 
 ## Rigging in Rust
 
@@ -100,6 +136,7 @@ Terrain requests produce one large PNG atlas with compatible fills, edges, corne
 - Built-in art directions for Pixel RPG, Graphic adventure, Cozy chibi, Limited palette, Isometric pixel, Painterly fantasy, Cel shaded, One-bit, Top-down adventure, SNES-era action RPG, Compact roguelike, Pixel platformer, NES 8-bit, Dark fantasy pixel, Paper cutout, Watercolor, Comic ink, Neon synth, Clay, and Voxel—with workspace and chat overrides
 - Full-size sprite viewer with zoom controls, pixel-perfect scaling, wheel zoom, metadata, reveal-on-disk, and **Animate this**
 - Grouped animation sets with frame-count badges, playable previews, a timeline editor, onion skinning, per-frame timing, templates, and non-destructive revisions
+- **Post-generation pipeline** — character anchors (`.sprite-studio/anchors/`), strip QC (`score_strip`), strip split, normalize-to-anchor, frame aligner with metadata offsets, size-contract gate, autonomous **`queue_contract_retry`** (poll `get_job` for `stage` / `metadataJson.attempts`), and review states (`draft` / `accepted`)
 - Rig-only, AI-polish, and experimental full-redraw finishing modes
 - Physical motion planning using estimated or user-supplied meters, meters per second, jump height, contact states, support phases, and world displacement
 - Reusable motion templates and body-part masks with explicit pivots, overlap, z-order, stable regions, and loop closure
@@ -242,7 +279,9 @@ On macOS or Linux, point `command` at `src-tauri/target/release/sprite-studio-mc
 5. Poll `get_generation` with the returned `requestId` until `status` is `completed` or `failed`.
 6. `list_artifacts` with the `workspaceId` to get PNG paths under `assets/`.
 
-Phase 2 tools (`export`, `queue_sprite_sheet`, `queue_procedural_vfx`, `get_job`, `quality_report`, `list_assets`, `list_packs`) run in Rust without spawning an agent.
+Pipeline tools (`promote_anchor`, `split_strip`, `extract_video_frames`, `normalize_animation`, `align_frames`, `check_size_contract`, `set_animation_review_status`) harden AI strips and video extractions before export. **Installers bundle ffmpeg** for video import; dev builds run `make fetch-ffmpeg` before `make bundle`. Phase 2 tools (`export`, `queue_sprite_sheet`, `queue_procedural_vfx`, `get_job`, `quality_report`, `list_assets`, `list_packs`) run in Rust without spawning an agent.
+
+Full tool list, parameters, and examples: [docs/en/mcp-reference.md](docs/en/mcp-reference.md) (Italian: [docs/it/riferimento-mcp.md](docs/it/riferimento-mcp.md)).
 
 ### Build a desktop bundle
 
@@ -282,6 +321,7 @@ animations/
 exports/
   sprite-sheets/
 .sprite-studio/
+  anchors/
   imagegen-sources/
   masters/
   packs/
@@ -305,7 +345,7 @@ SQLite stores project metadata, conversations, worktrees, asset versions, timeli
 
 ## Project status
 
-Sprite Studio `0.3.0` is an early public release. The core desktop workflow works, but file formats, provider adapters, and generation harnesses will continue to evolve.
+Sprite Studio `0.3.x` is an early public release. The core desktop workflow works, but file formats, provider adapters, and generation harnesses will continue to evolve.
 
 ## Contributing and governance
 

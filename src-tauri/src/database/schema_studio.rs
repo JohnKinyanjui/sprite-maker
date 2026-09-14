@@ -255,3 +255,16 @@ pub(crate) fn migrate_v12(transaction: &Transaction<'_>) -> CommandResult<()> {
         .map_err(|error| CommandError::new("migration_failed", error.to_string()))?;
     Ok(())
 }
+
+pub(crate) fn migrate_v13(transaction: &Transaction<'_>) -> CommandResult<()> {
+    transaction
+        .execute_batch(
+            r#"
+        ALTER TABLE animations ADD COLUMN review_status TEXT NOT NULL DEFAULT 'draft';
+
+        INSERT INTO migrations(version, applied_at) VALUES (13, datetime('now'));
+        "#,
+        )
+        .map_err(|error| CommandError::new("migration_failed", error.to_string()))?;
+    Ok(())
+}

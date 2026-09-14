@@ -17,7 +17,7 @@ use super::skin::render_frames;
 use super::types::{Rig, RigInput, RigRenderResult};
 use super::validate::validate_perceptible_rig_motion;
 
-fn render_rig_frames_blocking(master_path: String, rig: Rig) -> CommandResult<Vec<RgbaImage>> {
+pub(crate) fn render_rig_frames_blocking(master_path: String, rig: Rig) -> CommandResult<Vec<RgbaImage>> {
     let master = image::open(&master_path)?.to_rgba8();
     Ok(render_frames(&master, &rig))
 }
@@ -130,6 +130,8 @@ pub(crate) fn render_rig_animation_inner(
         animation_frames.push(AnimationFrame {
             asset_id: registered.id,
             duration_ms: None,
+            offset_x: 0,
+            offset_y: 0,
         });
     }
     let source_relative = std::path::Path::new(&asset.path)
@@ -147,6 +149,10 @@ pub(crate) fn render_rig_animation_inner(
         rig_id: Some(rig.id.clone()),
         source: Some(source_relative),
         quality: None,
+        direction_family: None,
+        facing: None,
+        mirrored_from: None,
+        anchor_slug: None,
     };
     std::fs::write(
         workspace
@@ -165,6 +171,7 @@ pub(crate) fn render_rig_animation_inner(
             looping: rig.looping,
             frames: animation_frames,
             motion_plan: None,
+            review_status: Some("draft".to_string()),
         },
         state,
     )?;

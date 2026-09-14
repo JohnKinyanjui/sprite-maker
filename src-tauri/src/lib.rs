@@ -1,5 +1,6 @@
 mod animations;
 mod assets;
+mod pipeline;
 mod backups;
 mod conversations;
 mod database;
@@ -192,6 +193,7 @@ pub fn run() {
             })?;
             let connection = database::open(&data_directory.join("sprite-studio.sqlite3"))?;
             app.manage(AppState::from_connection(connection));
+            workspace::initialize_ffmpeg_runtime();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -200,6 +202,7 @@ pub fn run() {
             workspace::create_workspace,
             workspace::open_workspace,
             workspace::check_python_runtime,
+            workspace::check_ffmpeg_runtime,
             workspace::run_sprite_polish,
             workspace::archive_sprite_paths,
             workspace::restore_sprite_paths,
@@ -265,6 +268,7 @@ pub fn run() {
             animations::save_animation,
             animations::delete_animation,
             animations::export_animation,
+            animations::export_animation_preview,
             jobs::list_jobs,
             jobs::cancel_job,
             jobs::list_sprite_sheets,
@@ -278,6 +282,47 @@ pub fn run() {
             quality::optimize_animation_frames,
             quality::repair_animation_alignment,
             quality::repair_animation_transparency,
+            pipeline::promote_anchor,
+            pipeline::get_anchor,
+            pipeline::list_anchors,
+            pipeline::detect_anchor_facing,
+            pipeline::list_facing_checks,
+            pipeline::orient_anchor,
+            pipeline::score_animation_frames,
+            pipeline::mirror_animation,
+            pipeline::list_direction_meta,
+            pipeline::queue_direction_set,
+            pipeline::list_motion_presets,
+            pipeline::list_missing_motions,
+            pipeline::save_motion_presets,
+            pipeline::list_generation_sessions,
+            pipeline::queue_motion_batch,
+            pipeline::queue_region_regen,
+            pipeline::clean_alpha_animation,
+            pipeline::normalize_animation,
+            pipeline::snap_to_pixel_grid,
+            pipeline::harden_animation,
+            pipeline::split_sprite_strip,
+            pipeline::score_sprite_strip,
+            pipeline::extract_video_frames,
+            pipeline::subsample_video_frames,
+            pipeline::quantize_worktree_palette,
+            pipeline::paint_frame_alpha,
+            pipeline::restore_asset_version,
+            pipeline::nudge_animation_frames,
+            pipeline::reset_animation_alignment_offsets,
+            pipeline::check_size_contract,
+            pipeline::check_character_contract,
+            pipeline::export_character_pack,
+            pipeline::get_character_profile,
+            pipeline::refresh_character_profile,
+            pipeline::export_character_profile,
+            pipeline::import_character_profile,
+            pipeline::get_production_score,
+            pipeline::retry_size_contract,
+            pipeline::finalize_contract_retry,
+            pipeline::queue_contract_retry,
+            pipeline::set_animation_review_status,
             rig::list_rigs,
             rig::save_rig,
             rig::delete_rig,
@@ -287,6 +332,8 @@ pub fn run() {
             rig::analyze_rig_fit,
             rig::render_rig_preview,
             rig::render_rig_animation,
+            rig::interpolate_rig_frames,
+            rig::interpolate_rig_animation_frames,
             settings::get_setting,
             settings::set_setting,
         ])

@@ -26,12 +26,7 @@ For a cheetah or similarly flexible sprinting cat, use a rotary double-suspensio
 
 ## Build the deterministic rig
 
-For more than one frame, inspect the master and write a rig under `.sprite-studio/rigs/<slug>.json`. Render only with:
-
-```bash
-python3 .sprite-studio/sprite_rig.py --validate .sprite-studio/rigs/<slug>.json
-python3 .sprite-studio/sprite_rig.py .sprite-studio/rigs/<slug>.json
-```
+For more than one frame, inspect the master and write a rig under `.sprite-studio/rigs/<slug>.json`. Validate with MCP **`analyze_rig_fit`**, persist with **`save_rig`**, and render with **`render_rig_animation`** (see `SKILL.md` native rig path).
 
 Define parts that match the creature's actual anatomy in a `rigVersion: 3` rig and select the matching anatomy-specific `rigProfile`. Typical centipede parts are `head`, `front_body`, individually grouped middle segments, `tail`, left/right antennae, and paired leg banks. Give them semantic roles, named anchors, parent/attachment relationships, bone envelopes, tight polygon masks, physical pivots, and explicit depth. Use `baseZ` and per-frame `zOverrides` when crossing appendages change occlusion. Every frame must reuse the same exclusively owned master pixels; reserve `overlapMode: "joint-cap"` for a small intentional joint seam.
 

@@ -10,10 +10,15 @@ use tauri::State;
 use uuid::Uuid;
 
 mod bundled;
+mod ffmpeg;
 mod polish;
 mod python;
 use bundled::initialize_workspace;
 
+pub use ffmpeg::{
+    __cmd__check_ffmpeg_runtime, __tauri_command_name_check_ffmpeg_runtime, check_ffmpeg_runtime,
+};
+pub(crate) use ffmpeg::{initialize_ffmpeg_runtime, resolve_ffmpeg_executable, FFMPEG_MISSING_DETAIL};
 pub use python::{
     __cmd__check_python_runtime, __tauri_command_name_check_python_runtime, check_python_runtime,
 };

@@ -33,13 +33,14 @@ else
   $(error Unsupported host '$(HOST_OS)'. Build releases on macOS, Windows, or Linux.)
 endif
 
-.PHONY: help install check test native-test verify bundle collect release release-macos publish-macos macos linux windows
+.PHONY: help install check test native-test verify fetch-ffmpeg bundle collect release release-macos publish-macos macos linux windows
 
 help:
 	@printf '%s\n' \
 	  'Sprite Studio local release commands:' \
 	  '  make install       Install locked JavaScript dependencies.' \
 	  '  make verify        Run frontend and Rust checks.' \
+	  '  make fetch-ffmpeg  Download bundled ffmpeg for this platform.' \
 	  '  make bundle        Build native bundles for this machine.' \
 	  '  make release       Verify, build, and collect this machine’s installers.' \
 	  '  make release-macos Build one universal Intel + Apple Silicon macOS release.' \
@@ -58,11 +59,19 @@ test:
 	$(BUN) test
 
 native-test:
-	cargo test --manifest-path src-tauri/Cargo.toml
+	cargo test --lib --manifest-path src-tauri/Cargo.toml
 
 verify: check test native-test
 
-bundle: verify
+fetch-ffmpeg:
+	@case "$(HOST_OS)" in \
+	  MINGW*|MSYS*|CYGWIN*) powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1 ;; \
+	  Darwin) bash scripts/fetch-ffmpeg.sh ;; \
+	  Linux) bash scripts/fetch-ffmpeg.sh ;; \
+	  *) printf '%s\n' 'Unsupported host for fetch-ffmpeg.' >&2; exit 1 ;; \
+	esac
+
+bundle: fetch-ffmpeg verify
 	$(TAURI) build
 
 collect: bundle $(PLATFORM)
@@ -72,6 +81,7 @@ release: collect
 
 release-macos: verify
 	@test "$(HOST_OS)" = Darwin || { printf '%s\n' 'Universal macOS bundles must be built on macOS.' >&2; exit 1; }
+	bash scripts/fetch-ffmpeg.sh --universal-macos
 	rustup target add aarch64-apple-darwin x86_64-apple-darwin
 	$(TAURI) build --target $(MACOS_TARGET)
 	$(MAKE) macos BUNDLE_DIR='$(MACOS_BUNDLE_DIR)' ARCH_LABEL=universal

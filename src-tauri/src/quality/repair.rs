@@ -100,6 +100,7 @@ fn repair_transparency_inner(
         looping,
         frames,
         motion_plan: None,
+        review_status: "draft".to_string(),
         created_at,
         updated_at: repaired_at,
     })

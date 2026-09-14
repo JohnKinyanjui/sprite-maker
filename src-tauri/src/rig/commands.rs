@@ -49,12 +49,11 @@ pub(crate) fn capture_chat_suggestion(
     Ok(Some(name))
 }
 
-#[tauri::command]
-pub fn analyze_rig_fit(
-    asset_id: String,
-    state: State<'_, AppState>,
+pub(crate) fn analyze_rig_fit_inner(
+    state: &AppState,
+    asset_id: &str,
 ) -> CommandResult<RigFitReport> {
-    let (_, master) = load_master_asset(&state, &asset_id)?;
+    let (_, master) = load_master_asset(state, asset_id)?;
     let detections = detect_morphology(&master)?;
     let best = detections.first().ok_or_else(|| {
         CommandError::new("morphology_failed", "The sprite could not be profiled")
@@ -94,9 +93,31 @@ pub fn analyze_rig_fit(
     })
 }
 
+#[tauri::command]
+pub fn analyze_rig_fit(
+    asset_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<RigFitReport> {
+    analyze_rig_fit_inner(&state, &asset_id)
+}
+
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
+
+const RIG_SELECT: &str =
+    "SELECT id, workspace_id, worktree_id, asset_id, name, morphology, fps, looping, spec_json, created_at, updated_at FROM rigs";
+
+pub(crate) fn load_rig_by_id(state: &AppState, rig_id: &str) -> CommandResult<Option<Rig>> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    connection
+        .query_row(&format!("{RIG_SELECT} WHERE id=?1"), [rig_id], rig_row)
+        .optional()
+        .map_err(Into::into)
+}
 
 fn rig_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Rig> {
     let spec_json: String = row.get(8)?;
@@ -128,14 +149,13 @@ pub fn list_rigs(
         .db
         .lock()
         .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
-    let select = "SELECT id, workspace_id, worktree_id, asset_id, name, morphology, fps, looping, spec_json, created_at, updated_at FROM rigs";
     let mut statement = if worktree_id.is_some() {
         connection.prepare(&format!(
-            "{select} WHERE workspace_id = ?1 AND worktree_id = ?2 ORDER BY updated_at DESC"
+            "{RIG_SELECT} WHERE workspace_id = ?1 AND worktree_id = ?2 ORDER BY updated_at DESC"
         ))?
     } else {
         connection.prepare(&format!(
-            "{select} WHERE workspace_id = ?1 ORDER BY updated_at DESC"
+            "{RIG_SELECT} WHERE workspace_id = ?1 ORDER BY updated_at DESC"
         ))?
     };
     let rows = if let Some(value) = worktree_id.as_ref() {
@@ -193,6 +213,36 @@ pub(super) fn rig_input_to_rig(input: RigInput, state: &AppState) -> CommandResu
 #[tauri::command]
 pub fn save_rig(input: RigInput, state: State<'_, AppState>) -> CommandResult<Rig> {
     save_rig_inner(input, &state)
+}
+
+pub(crate) fn render_rig_animation_blocking(
+    input: RigInput,
+    state: &AppState,
+) -> CommandResult<super::types::RigRenderResult> {
+    use super::render::{render_rig_animation_inner, render_rig_frames_blocking};
+    use super::validate::validate_perceptible_rig_motion;
+
+    let rig = rig_input_to_rig(input, state)?;
+    let asset_id = rig.asset_id.clone().ok_or_else(|| {
+        CommandError::new("missing_master", "Choose a source sprite before rendering")
+    })?;
+    let asset = assets::get_asset(state, &asset_id)?;
+    let workspace = workspace_path(state, &rig.workspace_id)?;
+    if rig.bones.is_empty() {
+        return Err(CommandError::new(
+            "empty_rig",
+            "Add at least one bone before rendering",
+        ));
+    }
+    validate_perceptible_rig_motion(&rig)?;
+    let master_path = asset.path.clone();
+    let render_rig = rig.clone();
+    let frames = tauri::async_runtime::block_on(async move {
+        tauri::async_runtime::spawn_blocking(move || render_rig_frames_blocking(master_path, render_rig))
+            .await
+    })
+    .map_err(|error| CommandError::new("render_failed", error.to_string()))??;
+    render_rig_animation_inner(&frames, &rig, &asset, &workspace, state)
 }
 
 pub(crate) fn save_rig_inner(input: RigInput, state: &AppState) -> CommandResult<Rig> {
@@ -274,14 +324,22 @@ fn load_master_asset(
     Ok((asset, image))
 }
 
+pub(crate) fn suggest_rig_points_inner(
+    state: &AppState,
+    asset_id: &str,
+    morphology: Option<&str>,
+) -> CommandResult<RigSuggestion> {
+    let (_, master) = load_master_asset(state, asset_id)?;
+    suggest_points(&master, &normalize_morphology(morphology))
+}
+
 #[tauri::command]
 pub fn suggest_rig_points(
     asset_id: String,
     morphology: Option<String>,
     state: State<'_, AppState>,
 ) -> CommandResult<RigSuggestion> {
-    let (_, master) = load_master_asset(&state, &asset_id)?;
-    suggest_points(&master, &normalize_morphology(morphology.as_deref()))
+    suggest_rig_points_inner(&state, &asset_id, morphology.as_deref())
 }
 
 #[derive(Debug, Clone, Deserialize)]

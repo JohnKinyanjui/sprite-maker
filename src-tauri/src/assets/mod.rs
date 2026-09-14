@@ -13,7 +13,7 @@ pub use inspect::{
 };
 pub(crate) use inspect::{inspect, list_assets_inner, upsert};
 pub(crate) use pixel_normalize::{
-    extract_palette, normalize_sprite_alpha, normalize_sprite_file,
+    defringe, extract_palette, normalize_sprite_alpha, normalize_sprite_file, remove_orphan_pixels,
 };
 pub use scan::{
     __cmd__export_asset, __cmd__get_generation_fingerprint, __cmd__get_generation_manifest,
@@ -25,7 +25,8 @@ pub use scan::{
     scan_generation_assets,
 };
 pub(crate) use scan::{
-    export_asset_inner, read_generation_manifest, scan_generation_assets_inner,
+    export_asset_inner, read_generation_manifest, recover_manifest_from_imagegen_sources,
+    scan_generation_assets_inner, write_generation_manifest,
 };
 #[cfg(test)]
 use scan::{collect_workspace_rig_specs, generation_fingerprint};

@@ -4,7 +4,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { ChevronLeft, ChevronRight, Grid3X3, Pause, Play, Trash2, X } from "lucide-svelte";
   import { api, assetUrl } from "$lib/api";
-  import { errorMessage, type Animation, type Asset, type BackgroundJob, type FrameAlignment, type JobEvent, type SpriteSheet, type SpriteSheetLayout } from "$lib/types";
+  import { errorMessage, type Animation, type AnimationExportFormat, type Asset, type BackgroundJob, type FrameAlignment, type JobEvent, type SpriteSheet, type SpriteSheetLayout } from "$lib/types";
 
   let { workspaceId, worktreeId, animations, assets, active, onError, onNotice }: {
     workspaceId: string; worktreeId?: string; animations: Animation[]; assets: Asset[]; active: boolean;
@@ -28,6 +28,7 @@
   let alignment = $state<FrameAlignment>("bottom_center");
   let pivotX = $state(0.5);
   let pivotY = $state(1);
+  let metadataFormat = $state<AnimationExportFormat>("sprite-studio");
   let playing = $state(false);
   let frameIndex = $state(0);
   let playbackSpeed = $state(1);
@@ -59,7 +60,7 @@
   async function build() {
     if(!animation){onError("Select an animation first");return;}
     try {
-      const job=await api.queueSpriteSheet({projectId:workspaceId,worktreeId,animationId:animation.id,name,layout,frameWidth,frameHeight,padding,spacing,columns,scale,transparent,alignment,pivotX,pivotY});
+      const job=await api.queueSpriteSheet({projectId:workspaceId,worktreeId,animationId:animation.id,name,layout,frameWidth,frameHeight,padding,spacing,columns,scale,transparent,alignment,pivotX,pivotY,metadataFormat});
       jobs=[job,...jobs.filter(item=>item.id!==job.id)];onNotice("Sprite-sheet build queued");
     } catch(error){onError(errorMessage(error));}
   }
@@ -116,6 +117,7 @@
         <div class="pair"><label>Padding<input type="number" min="0" max="128" bind:value={padding}/></label><label>Spacing<input type="number" min="0" max="128" bind:value={spacing}/></label></div>
         <div class="pair"><label>Export scale<select bind:value={scale}><option value={1}>1×</option><option value={2}>2×</option><option value={3}>3×</option><option value={4}>4×</option><option value={8}>8×</option></select></label><label>Alignment<select bind:value={alignment}><option value="bottom_center">Bottom center</option><option value="center">Center</option><option value="top_left">Top left</option></select></label></div>
         <div class="pair"><label>Pivot X<input type="number" min="0" max="1" step="0.05" bind:value={pivotX}/></label><label>Pivot Y<input type="number" min="0" max="1" step="0.05" bind:value={pivotY}/></label></div>
+        <label>Metadata format<select bind:value={metadataFormat}><option value="sprite-studio">Sprite Studio JSON</option><option value="aseprite-json">Aseprite JSON</option><option value="texturepacker">TexturePacker</option><option value="godot-spriteframes">Godot SpriteFrames</option></select></label>
         <label class="check"><input type="checkbox" bind:checked={transparent}/> Transparent background</label>
         <div class="jobs"><h2>Background jobs</h2>{#if sheetJobs.length}{#each sheetJobs.slice(0,6) as job}<article class:failed={job.status==="failed"}><div><strong>{job.stage}</strong><span>{Math.round(job.progress*100)}% · {job.status}</span></div><div class="bar"><i style={`width:${job.progress*100}%`}></i></div>{#if ["queued","running","analyzing"].includes(job.status)}<button onclick={()=>cancel(job)}><X size={11}/>Cancel</button>{/if}</article>{/each}{:else}<p>No jobs yet.</p>{/if}</div>
       </aside>

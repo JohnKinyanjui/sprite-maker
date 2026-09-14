@@ -53,7 +53,7 @@ fn migration_creates_the_project_and_worktree_domain_schema() {
     let migration_version: i64 = connection
         .query_row("SELECT MAX(version) FROM migrations", [], |row| row.get(0))
         .expect("migration version should be recorded");
-    assert_eq!(migration_version, 12);
+    assert_eq!(migration_version, 13);
 
     let archived_column: i64 = connection
         .query_row(

@@ -71,6 +71,7 @@ pub struct Animation {
     pub looping: bool,
     pub frames: Vec<AnimationFrame>,
     pub motion_plan: Option<MotionPlan>,
+    pub review_status: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -80,6 +81,10 @@ pub struct Animation {
 pub struct AnimationFrame {
     pub asset_id: String,
     pub duration_ms: Option<u32>,
+    #[serde(default)]
+    pub offset_x: i32,
+    #[serde(default)]
+    pub offset_y: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +151,7 @@ pub struct AnimationInput {
     pub looping: bool,
     pub frames: Vec<AnimationFrame>,
     pub motion_plan: Option<MotionPlan>,
+    pub review_status: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,6 +161,7 @@ pub struct ExportResult {
     pub metadata_path: String,
     pub width: u32,
     pub height: u32,
+    pub format: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
