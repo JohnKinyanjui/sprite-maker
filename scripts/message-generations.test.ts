@@ -42,6 +42,50 @@ describe("inferMessageGeneration", () => {
     expect(inferMessageGeneration(failed, [asset("old", "old-run")], [])).toBeUndefined();
   });
 
+  test("binds a static sprite from explicit output paths instead of an older animation", () => {
+    const shieldAssets = [
+      { ...asset("s1", "shield_guard_01"), relativePath: "assets/characters/shield_guard_01.png", path: "/workspace/assets/characters/shield_guard_01.png" },
+      { ...asset("s2", "shield_guard_02"), relativePath: "assets/characters/shield_guard_02.png", path: "/workspace/assets/characters/shield_guard_02.png" },
+    ];
+    const knight = {
+      ...asset("k1", "astral_cartographer"),
+      relativePath: "assets/characters/astral_cartographer.png",
+      path: "/workspace/assets/characters/astral_cartographer.png",
+    };
+    const animations: Animation[] = [{
+      id: "shield", workspaceId: "workspace", name: "shield_guard", fps: 8,
+      looping: true, frames: shieldAssets.map(item => ({ assetId: item.id })), createdAt: "now", updatedAt: "now",
+    }];
+    const completed = message("Published assets/characters/astral_cartographer.png as the new knight master after shield_guard.");
+    completed.metadata = {
+      generation: {
+        kind: "sprite-generation",
+        name: "shield_guard",
+        category: "characters",
+        fps: 8,
+        assetIds: ["s1", "s2"],
+        animationId: "shield",
+      },
+    };
+    const result = inferMessageGeneration(completed, [...shieldAssets, knight], animations);
+    expect(result?.assetIds).toEqual(["k1"]);
+    expect(result?.animationId).toBeUndefined();
+    expect(result?.name).toBe("astral_cartographer");
+  });
+
+  test("binds every mentioned static asset when no animation frames match", () => {
+    const mushroom = asset("m1", "forest_mushroom_red");
+    const stump = asset("s1", "forest_stump_mossy");
+    const result = inferMessageGeneration(
+      message("Saved forest_mushroom_red and forest_stump_mossy as separate props."),
+      [mushroom, stump],
+      [],
+    );
+    expect(result?.assetIds).toEqual(["m1", "s1"]);
+    expect(result?.animationId).toBeUndefined();
+    expect(result?.fps).toBe(1);
+  });
+
   test("keeps the best artifact when generation completes with a warning", () => {
     const warned = message("Published the best valid lion gallop. GENERATION_WARNING: minor top-down anatomy seam remains.");
     warned.metadata = { generation: { kind: "sprite-generation", name: "lion-gallop", category: "creatures", fps: 10, assetIds: ["lion"] } };

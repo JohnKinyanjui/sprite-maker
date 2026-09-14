@@ -1,3 +1,5 @@
+import { spriteGenerationCard, stripFrameSuffix } from "$lib/generation-reconcile";
+import { extractAssetPathsFromResponse, findAssetByManifestPath } from "$lib/manifest-path";
 import type { Animation, Asset, AssetPack, Message, PackGenerationMetadata, SpriteGenerationMetadata } from "$lib/types";
 
 function includesToken(content: string, token: string | undefined): boolean {
@@ -49,12 +51,44 @@ function generationFromAnimation(animation: Animation, assets: Asset[]): SpriteG
   };
 }
 
+function generationFromResponsePaths(
+  pathResolvedAssets: Asset[],
+  animations: Animation[],
+): SpriteGenerationMetadata {
+  const covering = animations.find(animation =>
+    animation.frames.length === pathResolvedAssets.length
+    && pathResolvedAssets.every(asset => animation.frames.some(frame => frame.assetId === asset.id)),
+  );
+  if (covering) return generationFromAnimation(covering, pathResolvedAssets)!;
+  return spriteGenerationCard(
+    pathResolvedAssets,
+    stripFrameSuffix(pathResolvedAssets[0].name),
+    pathResolvedAssets[0].category,
+    pathResolvedAssets.length > 1 ? 8 : 1,
+  );
+}
+
 export function inferMessageGeneration(message: Message, assets: Asset[], animations: Animation[]): SpriteGenerationMetadata | undefined {
   if (message.role !== "assistant" || message.status !== "completed" || reportsGenerationFailure(message.content)) return;
+  const responsePaths = extractAssetPathsFromResponse(message.content);
+  const pathResolvedAssets = responsePaths
+    .map(path => findAssetByManifestPath(assets, path))
+    .filter((asset): asset is Asset => Boolean(asset));
   const stored = message.metadata.generation;
   if (stored && typeof stored === "object" && "kind" in stored && stored.kind === "sprite-generation") {
-    return stored as SpriteGenerationMetadata;
+    const metadata = stored as SpriteGenerationMetadata;
+    const resolved = metadata.assetIds
+      .map(id => assets.find(asset => asset.id === id))
+      .filter((asset): asset is Asset => Boolean(asset));
+    if (
+      pathResolvedAssets.length
+      && !pathResolvedAssets.every(asset => metadata.assetIds.includes(asset.id))
+    ) {
+      return generationFromResponsePaths(pathResolvedAssets, animations);
+    }
+    if (resolved.length === metadata.assetIds.length) return metadata;
   }
+  if (pathResolvedAssets.length) return generationFromResponsePaths(pathResolvedAssets, animations);
   const content = message.content.toLowerCase();
   const mentionedAssets = assets.filter(asset =>
     includesToken(content, asset.relativePath)
@@ -64,26 +98,27 @@ export function inferMessageGeneration(message: Message, assets: Asset[], animat
   );
   const mentionedIds = new Set(mentionedAssets.map(asset => asset.id));
 
-  const candidates = animations
-    .map(animation => {
-      const nameMatch = animation.name.length >= 8 && mentionsAnimation(content, animation.name);
-      const frameMatches = animation.frames.filter(frame => mentionedIds.has(frame.assetId)).length;
-      return { animation, nameMatch, frameMatches };
-    })
-    .filter(candidate => candidate.nameMatch || candidate.frameMatches > 0)
-    .sort((left, right) => Number(right.nameMatch) - Number(left.nameMatch) || right.frameMatches - left.frameMatches);
-  const animationGeneration = candidates[0] ? generationFromAnimation(candidates[0].animation, assets) : undefined;
+  const frameLinked = animations
+    .map(animation => ({
+      animation,
+      frameMatches: animation.frames.filter(frame => mentionedIds.has(frame.assetId)).length,
+    }))
+    .filter(candidate => candidate.frameMatches > 0)
+    .sort((left, right) => right.frameMatches - left.frameMatches);
+  const animationGeneration = frameLinked[0] ? generationFromAnimation(frameLinked[0].animation, assets) : undefined;
   if (animationGeneration) return animationGeneration;
-  if (!mentionedAssets.length) return;
+  if (!mentionedAssets.length) {
+    const nameMatched = animations.find(animation => animation.name.length >= 8 && mentionsAnimation(content, animation.name));
+    return nameMatched ? generationFromAnimation(nameMatched, assets) : undefined;
+  }
 
   const first = mentionedAssets[0];
-  return {
-    kind: "sprite-generation",
-    name: first.name,
-    category: first.category,
-    fps: 1,
-    assetIds: [first.id],
-  };
+  return spriteGenerationCard(
+    mentionedAssets,
+    stripFrameSuffix(first.name),
+    first.category,
+    1,
+  );
 }
 
 export function inferMessagePack(message: Message, packs: AssetPack[]): { pack: AssetPack; metadata: PackGenerationMetadata } | undefined {

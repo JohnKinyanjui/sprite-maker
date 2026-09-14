@@ -41,6 +41,11 @@ export function findAnimationCoveringAssets(animations: Animation[], cardAssets:
   return animations.find(item => cardAssets.every(asset => item.frames.some(frame => frame.assetId === asset.id)));
 }
 
+/** Strip a trailing `_01` / `-02` frame suffix from a generated sprite name. */
+export function stripFrameSuffix(name: string): string {
+  return name.replace(/[_-]?\d+$/i, "");
+}
+
 /** Chat card payload for a completed sprite or animation generation. */
 export function spriteGenerationCard(
   cardAssets: Asset[],

@@ -14,7 +14,9 @@ import type {
   SpriteSlashCommand,
   Worktree,
 } from "$lib/types";
-import { spriteGenerationCard } from "$lib/generation-reconcile";
+import { spriteGenerationCard, stripFrameSuffix } from "$lib/generation-reconcile";
+
+export { stripFrameSuffix } from "$lib/generation-reconcile";
 import {
   type GenerationActivityEntry,
   type GenerationActivityLevel,
@@ -229,11 +231,6 @@ export function orderedGenerationAssets(acceptedManifestAssets: Asset[], related
     : [...related].sort((a, b) => a.relativePath.localeCompare(b.relativePath, undefined, { numeric: true }));
 }
 
-/** Strip a trailing `_01` / `-02` frame suffix from a generated sprite name. */
-export function stripFrameSuffix(name: string): string {
-  return name.replace(/[_-]?\d+$/i, "");
-}
-
 /** Multi-frame non-pack generations should become looping animations. */
 export function shouldSaveGeneratedAnimation(command: SpriteSlashCommand | undefined, ordered: Asset[]): boolean {
   return command !== "pack" && ordered.length > 1;
@@ -256,6 +253,20 @@ export function spriteCardForOrderedAssets(
 /** Chat card metadata for a finished pack generation. */
 export function packGenerationCard(packId: string): PackGenerationMetadata {
   return { kind: "pack-generation", packId };
+}
+
+/** Merge sprite and/or pack generation cards onto assistant metadata in one write. */
+export function mergeAssistantGenerationMetadata(
+  existing: Record<string, unknown>,
+  input: {
+    generation?: ReturnType<typeof spriteCardForOrderedAssets>;
+    packGeneration?: PackGenerationMetadata;
+  },
+): Record<string, unknown> {
+  let metadata = { ...existing };
+  if (input.generation) metadata = { ...metadata, generation: input.generation };
+  if (input.packGeneration) metadata = { ...metadata, packGeneration: input.packGeneration };
+  return metadata;
 }
 
 /** Which studio tab should open after a completed generation. */
