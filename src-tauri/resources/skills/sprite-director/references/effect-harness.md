@@ -36,7 +36,7 @@ Save the accepted source under `.sprite-studio/imagegen-sources/<slug>/master.pn
 
 ImageGen establishes the art direction once. It must not redraw animation frames independently; explicit AI Polish/Full redraw may edit completed rough frames only under the frame-polish contract.
 
-For multiple frames, derive every frame from the locked master with deterministic raster operations and `.sprite-studio/sprite_rig.py`: integer translation, rotation, scaling, alpha fades, masked reveals, duplicated particle layers, and controlled distortion. For topology-changing effects such as explosions or dissipating smoke, deterministic masks and particles may supplement the locked master, but must preserve its palette, texture, lighting, and shape language.
+For multiple frames, derive every frame from the locked master with deterministic raster operations via MCP **`save_rig`** + **`render_rig_animation`**: integer translation, rotation, scaling, alpha fades, masked reveals, duplicated particle layers, and controlled distortion. For topology-changing effects such as explosions or dissipating smoke, deterministic masks and particles may supplement the locked master, but must preserve its palette, texture, lighting, and shape language.
 
 Stage the requested motion phases clearly: anticipation/ignition, expansion or travel, a held impact/peak, dissipation/recovery, and a clean loop closure when looping. For a one-shot impact effect, use at least eight frames and reserve 1–2 frames for the readable peak before breakup. Reject accidental duplicate frames unless they are an intentional hold.
 

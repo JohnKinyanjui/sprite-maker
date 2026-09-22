@@ -182,6 +182,8 @@ fn render_procedural_vfx(
         .map(|asset| AnimationFrame {
             asset_id: asset.id.clone(),
             duration_ms: Some(duration_ms.max(1)),
+            offset_x: 0,
+            offset_y: 0,
         })
         .collect();
     let frames_json = serde_json::to_string(&animation_frames)
@@ -210,8 +212,8 @@ fn render_procedural_vfx(
         let transaction = connection.transaction()?;
         transaction.execute(
             r#"INSERT INTO animations(
-                id, workspace_id, worktree_id, name, fps, looping, frames_json, created_at, updated_at
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)"#,
+                id, workspace_id, worktree_id, name, fps, looping, frames_json, review_status, created_at, updated_at
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,'draft',?8,?8)"#,
             params![
                 animation_id,
                 effect.project_id,

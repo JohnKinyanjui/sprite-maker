@@ -9,7 +9,11 @@ pub use persist::{
     __cmd__cancel_job, __cmd__list_jobs, __tauri_command_name_cancel_job,
     __tauri_command_name_list_jobs, cancel_job, list_jobs,
 };
-pub(crate) use persist::{cancellation_requested, load_job, set_job_state, JobProgress};
+pub(crate) use persist::{
+    cancellation_requested, load_job, request_job_cancellation, set_job_metadata, set_job_state,
+    JobProgress,
+};
+pub(crate) use persist::emit_job;
 pub(crate) use spritesheet::queue_sprite_sheet_inner;
 pub use spritesheet::{
     __cmd__delete_sprite_sheet, __cmd__list_sprite_sheets, __cmd__queue_sprite_sheet,

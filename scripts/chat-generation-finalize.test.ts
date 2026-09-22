@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  appendAssistantDelta, applyAnimationPolishModeToPrompt, buildFullRedrawPrompt, buildMotionPrompt, chatActivityLines, generationViewHandoff, inferChatCommand,
+  appendAssistantDelta, applyAnimationPolishModeToPrompt, buildFullRedrawPrompt, buildMotionPrompt, chatActivityLines, clearConversationRunningRequest, clearRunningRequest, generationViewHandoff, inferChatCommand,
   isFreshGenerationManifest, isRejectedStaticAnimation, mergeAssistantGenerationMetadata, orderedGenerationAssets,
   parallelGenerationsInWorkspace, spriteCardForOrderedAssets, stripFrameSuffix, unacceptedGenerationNotice,
 } from "../src/lib/chat-generation-finalize";
@@ -106,6 +106,14 @@ describe("chat generation finalize", () => {
     );
     expect(merged.generation).toEqual(spriteCard);
     expect(merged.packGeneration).toEqual({ kind: "pack-generation", packId: "forest-pack" });
+  });
+
+  test("clears running requests by conversation when request ids change", () => {
+    const running = {
+      chat: { id: "native-rig-99", conversationId: "chat", workspaceId: "ws", prompt: "", generation: {} as never, knownPackIds: [], startedAt: 0 },
+    };
+    expect(clearRunningRequest(running, "chat", "provider-uuid")).toEqual(running);
+    expect(clearConversationRunningRequest(running, "chat")).toEqual({});
   });
 
   test("appends streamed tokens onto the running assistant message", () => {

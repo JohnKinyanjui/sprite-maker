@@ -9,6 +9,22 @@ Thank you for helping improve Sprite Studio. Contributions are welcome through f
 - Keep each pull request focused on one coherent outcome.
 - Never include credentials, private workspace data, generated user assets, or third-party material without a compatible license.
 
+## Line endings
+
+The repository stores text files with LF line endings. `.gitattributes` enforces that policy.
+
+On Windows, disable automatic CRLF conversion so Git follows `.gitattributes`:
+
+```bash
+git config core.autocrlf false
+```
+
+After pulling `.gitattributes` for the first time, normalize tracked files if needed:
+
+```bash
+git add --renormalize .
+```
+
 ## Development workflow
 
 1. Fork the repository and create a descriptive branch.

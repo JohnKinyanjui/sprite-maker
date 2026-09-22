@@ -8,11 +8,21 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
 use uuid::Uuid;
 
+mod log;
 mod lookup;
+pub(crate) use log::{
+    append_conversation_log, append_provider_event_log, delete_conversation_log_entries,
+};
+pub use log::{
+    __cmd__append_conversation_log_entry, __cmd__export_conversation_debug_log,
+    __tauri_command_name_append_conversation_log_entry,
+    __tauri_command_name_export_conversation_debug_log, append_conversation_log_entry,
+    export_conversation_debug_log,
+};
 pub(crate) use lookup::conversation_row;
 pub use lookup::get_conversation;
 
-fn message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+pub(crate) fn message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let metadata: String = row.get(6)?;
     Ok(Message {
         id: row.get(0)?,
@@ -251,6 +261,7 @@ fn restore_conversation_record(
 
 #[tauri::command]
 pub fn delete_conversation(id: String, state: State<'_, AppState>) -> CommandResult<()> {
+    delete_conversation_log_entries(&state, &id)?;
     let connection = state
         .db
         .lock()

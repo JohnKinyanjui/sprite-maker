@@ -8,6 +8,7 @@ import {
   parsePolishModeFromPrompt,
   resolveAnimateMasterAsset,
   resolveLatestCharacterAsset,
+  resolveMasterAfterProviderMasterPhase,
   resolveMasterFromManifest,
   resolvePolishMode,
   shouldOrchestrateNativeRig,
@@ -96,6 +97,19 @@ describe("rig animation orchestrator helpers", () => {
       "/animate Use assets/characters/hero.png as the exact source master. Motion: walk.",
       [asset("a1", "hero.png", "assets/characters/hero.png")],
     )).toBe(false);
+  });
+
+  test("recovers the master from provider response paths when manifest freshness fails", () => {
+    const soldier = asset("soldier", "soldier.png", "assets/characters/soldier.png");
+    const library = [asset("old", "knight.png", "assets/characters/knight.png"), soldier];
+    expect(resolveMasterAfterProviderMasterPhase({
+      manifest: null,
+      freshManifest: false,
+      manifestChanged: false,
+      scanned: [],
+      library,
+      responsePaths: ["assets/characters/soldier.png"],
+    })?.id).toBe("soldier");
   });
 
   test("prefers manifest source when continuing after master-only generation", () => {

@@ -175,6 +175,6 @@ export async function hydrateGenerationData(
     manifest.name,
     manifest.category,
     manifest.fps,
-    findAnimationCoveringAssets(animations, cardAssets)?.id,
+    findAnimationWithOrderedFrames(animations, cardAssets)?.id,
   );
 }

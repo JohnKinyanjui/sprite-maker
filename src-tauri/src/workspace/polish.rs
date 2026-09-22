@@ -1,5 +1,6 @@
 use crate::{
     error::{CommandError, CommandResult},
+    providers::apply_tokio_headless_flags,
     workspace::{python::resolve_python_launcher, workspace_path},
     AppState,
 };
@@ -52,6 +53,7 @@ pub async fn run_sprite_polish(
         .current_dir(&root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    apply_tokio_headless_flags(&mut command);
     let output_process = timeout(Duration::from_secs(120), command.output())
         .await
         .map_err(|_| {

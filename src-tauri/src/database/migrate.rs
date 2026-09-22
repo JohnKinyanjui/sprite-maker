@@ -70,5 +70,15 @@ pub(crate) fn migrate(connection: &mut Connection) -> CommandResult<()> {
         super::schema_studio::migrate_v12(&transaction)?;
         transaction.commit()?;
     }
+    if version < 13 {
+        let transaction = connection.transaction()?;
+        super::schema_studio::migrate_v13(&transaction)?;
+        transaction.commit()?;
+    }
+    if version < 14 {
+        let transaction = connection.transaction()?;
+        super::schema_studio::migrate_v14(&transaction)?;
+        transaction.commit()?;
+    }
     Ok(())
 }

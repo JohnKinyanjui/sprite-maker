@@ -1,4 +1,5 @@
 use super::discovery::{current_provider_environment_path, find_executable};
+use super::headless::apply_std_headless_flags;
 use super::modes::provider_is_authenticated;
 use crate::error::{CommandError, CommandResult};
 use crate::models::ProviderInstallResult;
@@ -69,6 +70,7 @@ fn run_agent_cli_install(provider_id: &str) -> CommandResult<String> {
             ))
         }
     };
+    apply_std_headless_flags(&mut command);
     let output = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

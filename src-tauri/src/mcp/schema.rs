@@ -2,7 +2,7 @@ use crate::{
     assets::list_assets_inner,
     error::CommandResult,
     jobs::{load_job, queue_procedural_vfx_inner, queue_sprite_sheet_inner},
-    models::{ProceduralVfxInput, ProviderStatus, SpriteSheetInput},
+    models::{HardenAnimationOptions, ProceduralVfxInput, ProviderStatus, SpriteSheetInput},
     packs::list_asset_packs_inner,
     providers::cancel_provider_request_inner,
     AppState,
@@ -30,6 +30,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     runtime.block_on(async move {
         tauri::async_runtime::set(tokio::runtime::Handle::current());
         let (state, db_path) = AppState::open_headless()?;
+        crate::workspace::initialize_ffmpeg_runtime();
         let server = SpriteStudioMcp { state, db_path };
         let service = server.serve(stdio()).await?;
         let _ = service.waiting().await?;
@@ -107,6 +108,8 @@ pub(crate) struct ExportParams {
     pub(crate) kind: String,
     pub(crate) id: String,
     pub(crate) destination: Option<String>,
+    #[serde(rename = "exportFormat")]
+    pub(crate) export_format: Option<String>,
     #[serde(rename = "projectId")]
     pub(crate) project_id: Option<String>,
     #[serde(rename = "worktreeId")]
@@ -129,6 +132,234 @@ pub(crate) struct QualityParams {
     #[serde(rename = "animationId")]
     pub(crate) animation_id: String,
     pub(crate) analyze: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct PromoteAnchorParams {
+    #[serde(rename = "workspaceId")]
+    pub(crate) workspace_id: String,
+    #[serde(rename = "assetId")]
+    pub(crate) asset_id: String,
+    pub(crate) slug: Option<String>,
+    #[serde(rename = "autoOrient")]
+    pub(crate) auto_orient: Option<bool>,
+    pub(crate) view: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AnchorSlugParams {
+    #[serde(rename = "workspaceId")]
+    pub(crate) workspace_id: String,
+    pub(crate) slug: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AssetIdParams {
+    #[serde(rename = "assetId")]
+    pub(crate) asset_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SuggestRigParams {
+    #[serde(rename = "assetId")]
+    pub(crate) asset_id: String,
+    pub(crate) morphology: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct MirrorAnimationParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    #[serde(rename = "targetFacing")]
+    pub(crate) target_facing: String,
+    #[serde(rename = "sourceFacing")]
+    pub(crate) source_facing: Option<String>,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+    #[serde(rename = "rigId")]
+    pub(crate) rig_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct QueueDirectionSetParams {
+    #[serde(rename = "workspaceId")]
+    pub(crate) workspace_id: String,
+    #[serde(rename = "worktreeId")]
+    pub(crate) worktree_id: String,
+    #[serde(rename = "sourceAnimationId")]
+    pub(crate) source_animation_id: String,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: String,
+    pub(crate) motion: String,
+    pub(crate) set: String,
+    #[serde(rename = "conversationId")]
+    pub(crate) conversation_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct CleanAlphaParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SnapToPixelGridParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    #[serde(rename = "gridSize")]
+    pub(crate) grid_size: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct HardenAnimationParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+    #[serde(rename = "sourcePath")]
+    pub(crate) source_path: Option<String>,
+    #[serde(rename = "frameCount")]
+    pub(crate) frame_count: Option<u32>,
+    #[serde(rename = "conversationId")]
+    pub(crate) conversation_id: Option<String>,
+    pub(crate) options: Option<HardenAnimationOptions>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct NormalizeAnimationParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+    #[serde(rename = "lockFirstFrame")]
+    pub(crate) lock_first_frame: Option<bool>,
+    #[serde(rename = "sharedScale")]
+    pub(crate) shared_scale: Option<bool>,
+    pub(crate) padding: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ExtractVideoFramesParams {
+    #[serde(rename = "workspaceId")]
+    pub(crate) workspace_id: String,
+    #[serde(rename = "videoPath")]
+    pub(crate) video_path: String,
+    pub(crate) fps: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SplitStripParams {
+    #[serde(rename = "workspaceId")]
+    pub(crate) workspace_id: String,
+    #[serde(rename = "sourcePath")]
+    pub(crate) source_path: String,
+    pub(crate) layout: String,
+    #[serde(rename = "frameCount")]
+    pub(crate) frame_count: u32,
+    pub(crate) columns: Option<u32>,
+    #[serde(rename = "recoverForeground")]
+    pub(crate) recover_foreground: Option<bool>,
+    pub(crate) category: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ScoreStripParams {
+    #[serde(rename = "sourcePath")]
+    pub(crate) source_path: String,
+    #[serde(rename = "frameCount")]
+    pub(crate) frame_count: Option<u32>,
+    pub(crate) layout: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AlignFramesParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    pub(crate) deltas: Vec<crate::models::FrameNudgeDelta>,
+    #[serde(rename = "applyToAll")]
+    pub(crate) apply_to_all: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SizeContractParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct CharacterContractParams {
+    #[serde(rename = "workspaceId")]
+    pub(crate) workspace_id: String,
+    #[serde(rename = "worktreeId")]
+    pub(crate) worktree_id: String,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SetReviewStatusParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct RetrySizeContractParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+    #[serde(rename = "conversationId")]
+    pub(crate) conversation_id: Option<String>,
+    pub(crate) regenerate: Option<bool>,
+    #[serde(rename = "maxDeterministicPasses")]
+    pub(crate) max_deterministic_passes: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct QueueContractRetryParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    #[serde(rename = "conversationId")]
+    pub(crate) conversation_id: String,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+    #[serde(rename = "maxAiAttempts")]
+    pub(crate) max_ai_attempts: Option<u32>,
+    #[serde(rename = "maxDeterministicPasses")]
+    pub(crate) max_deterministic_passes: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ProductionScoreParams {
+    #[serde(rename = "workspaceId")]
+    pub(crate) workspace_id: String,
+    #[serde(rename = "worktreeId")]
+    pub(crate) worktree_id: String,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ScoreAnimationFramesParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct FinalizeContractRetryParams {
+    #[serde(rename = "animationId")]
+    pub(crate) animation_id: String,
+    #[serde(rename = "sourcePath")]
+    pub(crate) source_path: String,
+    #[serde(rename = "frameCount")]
+    pub(crate) frame_count: u32,
+    #[serde(rename = "anchorSlug")]
+    pub(crate) anchor_slug: Option<String>,
+    #[serde(default)]
+    pub(crate) layout: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -232,7 +463,7 @@ impl SpriteStudioMcp {
         ))
     }
 
-    #[tool(description = "Load a background job (sprite sheet, VFX, or quality analysis).")]
+    #[tool(description = "Load a background job (sprite sheet, VFX, quality analysis, or contract retry).")]
     fn get_job(&self, Parameters(params): Parameters<JobIdParams>) -> String {
         json_result(load_job(&self.state, &params.job_id))
     }
@@ -252,6 +483,253 @@ impl SpriteStudioMcp {
     #[tool(description = "List asset packs in a workspace.")]
     fn list_packs(&self, Parameters(params): Parameters<WorkspaceIdParams>) -> String {
         json_result(list_asset_packs_inner(&params.workspace_id, &self.state))
+    }
+
+    #[tool(description = "Promote an asset as the canonical character anchor for size and baseline contract.")]
+    fn promote_anchor(&self, Parameters(params): Parameters<PromoteAnchorParams>) -> String {
+        json_result(super::handlers::promote_anchor(&self.state, params))
+    }
+
+    #[tool(description = "Read-only facing report for a promoted anchor (side/top-down heuristics).")]
+    fn check_anchor_facing(&self, Parameters(params): Parameters<AnchorSlugParams>) -> String {
+        json_result(super::handlers::check_anchor_facing(&self.state, params))
+    }
+
+    #[tool(description = "Flip a promoted anchor to its canonical facing (side view → west).")]
+    fn orient_anchor(&self, Parameters(params): Parameters<AnchorSlugParams>) -> String {
+        json_result(super::handlers::orient_anchor(&self.state, params))
+    }
+
+    #[tool(description = "Read a promoted character anchor sidecar by slug.")]
+    fn get_anchor(&self, Parameters(params): Parameters<AnchorSlugParams>) -> String {
+        json_result(super::handlers::get_promoted_anchor(
+            &self.state,
+            &params.workspace_id,
+            &params.slug,
+        ))
+    }
+
+    #[tool(description = "List promoted character anchors in a workspace.")]
+    fn list_anchors(&self, Parameters(params): Parameters<WorkspaceIdParams>) -> String {
+        json_result(super::handlers::list_promoted_anchors(
+            &self.state,
+            &params.workspace_id,
+        ))
+    }
+
+    #[tool(description = "Remove fringe and semi-opaque halos from every frame PNG in an animation.")]
+    fn clean_alpha(&self, Parameters(params): Parameters<CleanAlphaParams>) -> String {
+        json_result(super::handlers::clean_alpha(&self.state, params))
+    }
+
+    #[tool(
+        description = "Snap animation metadata offsets to a pixel grid. When gridSize > 1, also quantizes opaque RGB channels in frame PNGs."
+    )]
+    fn snap_to_pixel_grid(&self, Parameters(params): Parameters<SnapToPixelGridParams>) -> String {
+        json_result(super::handlers::snap_to_pixel_grid(&self.state, params))
+    }
+
+    #[tool(
+        description = "Idempotent hardening chain: optional split, clean_alpha, normalize, snap grid, contract check, optional queue_contract_retry."
+    )]
+    fn harden_animation(&self, Parameters(params): Parameters<HardenAnimationParams>) -> String {
+        json_result(super::handlers::harden_animation(&self.state, params))
+    }
+
+    #[tool(description = "Normalize animation frames to a fixed-cell contract using a promoted anchor.")]
+    fn normalize_animation(
+        &self,
+        Parameters(params): Parameters<NormalizeAnimationParams>,
+    ) -> String {
+        json_result(super::handlers::normalize_animation(&self.state, params))
+    }
+
+    #[tool(
+        description = "Split a sprite strip or grid into individual recovered frames. Layout auto infers frameCount when it is 0."
+    )]
+    fn split_strip(&self, Parameters(params): Parameters<SplitStripParams>) -> String {
+        json_result(super::handlers::split_strip(&self.state, params))
+    }
+
+    #[tool(
+        description = "Score a sprite strip before import: inferred frame count, grid ink, motion delta, and warnings."
+    )]
+    fn score_strip(&self, Parameters(params): Parameters<ScoreStripParams>) -> String {
+        json_result(super::handlers::score_strip(&self.state, params))
+    }
+
+    #[tool(
+        description = "Extract PNG frames from a video with bundled or system ffmpeg. Returns assetIds like split_strip."
+    )]
+    fn extract_video_frames(
+        &self,
+        Parameters(params): Parameters<ExtractVideoFramesParams>,
+    ) -> String {
+        json_result(super::handlers::extract_video_frames(&self.state, params))
+    }
+
+    #[tool(description = "Apply per-frame nudge offsets to an animation without rewriting PNGs.")]
+    fn align_frames(&self, Parameters(params): Parameters<AlignFramesParams>) -> String {
+        json_result(super::handlers::align_frames(&self.state, params))
+    }
+
+    #[tool(description = "Check whether an animation satisfies the promoted anchor size contract.")]
+    fn check_size_contract(&self, Parameters(params): Parameters<SizeContractParams>) -> String {
+        json_result(super::handlers::check_size_contract(&self.state, params))
+    }
+
+    #[tool(
+        description = "Check every animation in a character worktree against the promoted anchor contract."
+    )]
+    fn check_character_contract(
+        &self,
+        Parameters(params): Parameters<CharacterContractParams>,
+    ) -> String {
+        json_result(super::handlers::check_character_contract(&self.state, params))
+    }
+
+    #[tool(
+        description = "Retry a failing size contract: deterministic normalize/nudge passes, then optional AI strip regeneration with a corrective prompt."
+    )]
+    fn retry_size_contract(
+        &self,
+        Parameters(params): Parameters<RetrySizeContractParams>,
+    ) -> String {
+        json_result(super::handlers::retry_size_contract(&self.state, params))
+    }
+
+    #[tool(
+        description = "Queue an autonomous contract-retry job: deterministic repair, AI strip regeneration with polling, import, and re-check until pass or max attempts."
+    )]
+    fn queue_contract_retry(
+        &self,
+        Parameters(params): Parameters<QueueContractRetryParams>,
+    ) -> String {
+        json_result(super::handlers::queue_contract_retry(&self.state, params))
+    }
+
+    #[tool(
+        description = "After AI regenerates a strip, import it with profile split, normalize, and re-check the size contract."
+    )]
+    fn finalize_contract_retry(
+        &self,
+        Parameters(params): Parameters<FinalizeContractRetryParams>,
+    ) -> String {
+        json_result(super::handlers::finalize_contract_retry(&self.state, params))
+    }
+
+    #[tool(description = "Derive a mirrored facing animation (e.g. walk-e from walk-w) without AI regeneration.")]
+    fn mirror_animation(&self, Parameters(params): Parameters<MirrorAnimationParams>) -> String {
+        json_result(super::handlers::mirror_animation(&self.state, params))
+    }
+
+    #[tool(
+        description = "Queue a direction-set job: mirror derivable facings from a canonical source animation and run character contract."
+    )]
+    fn queue_direction_set(
+        &self,
+        Parameters(params): Parameters<QueueDirectionSetParams>,
+    ) -> String {
+        json_result(super::handlers::queue_direction_set(&self.state, params))
+    }
+
+    #[tool(description = "Set animation review status to draft, accepted, or rejected.")]
+    fn set_animation_review_status(
+        &self,
+        Parameters(params): Parameters<SetReviewStatusParams>,
+    ) -> String {
+        json_result(super::handlers::set_animation_review(&self.state, params))
+    }
+
+    #[tool(description = "Save or update a native rig spec linked to a workspace master asset.")]
+    fn save_rig(&self, Parameters(input): Parameters<crate::rig::RigInput>) -> String {
+        json_result(super::handlers::save_rig(&self.state, input))
+    }
+
+    #[tool(description = "Render a saved native rig into frame PNGs and a draft animation.")]
+    fn render_rig_animation(&self, Parameters(input): Parameters<crate::rig::RigInput>) -> String {
+        json_result(super::handlers::render_rig_animation(&self.state, input))
+    }
+
+    #[tool(description = "Suggest deterministic rig points and bones for a master sprite asset.")]
+    fn suggest_rig_points(&self, Parameters(params): Parameters<SuggestRigParams>) -> String {
+        json_result(super::handlers::suggest_rig_points(&self.state, params))
+    }
+
+    #[tool(description = "Analyze how well a master sprite fits the native rig templates.")]
+    fn analyze_rig_fit(&self, Parameters(params): Parameters<AssetIdParams>) -> String {
+        json_result(super::handlers::analyze_rig_fit(&self.state, params))
+    }
+
+    #[tool(description = "Read the character identity profile sidecar for a promoted anchor.")]
+    fn get_character_profile(&self, Parameters(params): Parameters<AnchorSlugParams>) -> String {
+        json_result(super::handlers::get_character_profile(&self.state, params))
+    }
+
+    #[tool(
+        description = "Queue a motion batch job for missing or selected catalog motions on a character worktree. Poll get_job for progress."
+    )]
+    fn queue_motion_batch(
+        &self,
+        Parameters(input): Parameters<crate::models::QueueMotionBatchInput>,
+    ) -> String {
+        json_result(super::handlers::queue_motion_batch(&self.state, input))
+    }
+
+    #[tool(
+        description = "Queue regional regeneration for one animation frame using mask rectangles and optional brush strokes. Requires conversationId."
+    )]
+    fn queue_region_regen(
+        &self,
+        Parameters(input): Parameters<crate::models::QueueRegionRegenInput>,
+    ) -> String {
+        json_result(super::handlers::queue_region_regen(&self.state, input))
+    }
+
+    #[tool(
+        description = "Export a character pack (spritesheets, previews, manifest) to a workspace-relative destination. destination is required."
+    )]
+    fn export_character_pack(
+        &self,
+        Parameters(input): Parameters<crate::models::ExportCharacterPackInput>,
+    ) -> String {
+        json_result(super::handlers::export_character_pack(&self.state, input))
+    }
+
+    #[tool(
+        description = "Aggregate production score for a character worktree: size contract, character contract, and quality."
+    )]
+    fn get_production_score(
+        &self,
+        Parameters(params): Parameters<ProductionScoreParams>,
+    ) -> String {
+        json_result(super::handlers::get_production_score(&self.state, params))
+    }
+
+    #[tool(
+        description = "Insert interpolated rig keyframes between two pose indices and return preview paths."
+    )]
+    fn interpolate_rig_frames(
+        &self,
+        Parameters(input): Parameters<crate::rig::InterpolateRigFramesInput>,
+    ) -> String {
+        json_result(super::handlers::interpolate_rig_frames(&self.state, input))
+    }
+
+    #[tool(description = "Score per-frame motion deltas and stability for an animation.")]
+    fn score_animation_frames(
+        &self,
+        Parameters(params): Parameters<ScoreAnimationFramesParams>,
+    ) -> String {
+        json_result(super::handlers::score_animation_frames(&self.state, params))
+    }
+
+    #[tool(description = "List facing-check history for promoted anchors in a workspace.")]
+    fn list_facing_checks(
+        &self,
+        Parameters(input): Parameters<crate::pipeline::ListFacingChecksInput>,
+    ) -> String {
+        json_result(super::handlers::list_facing_checks(&self.state, input))
     }
 }
 
@@ -285,6 +763,8 @@ pub(crate) struct McpSpriteSheetInput {
     pub(crate) pivot_x: f64,
     #[serde(rename = "pivotY")]
     pub(crate) pivot_y: f64,
+    #[serde(rename = "metadataFormat")]
+    pub(crate) metadata_format: Option<String>,
 }
 
 impl McpSpriteSheetInput {
@@ -305,6 +785,7 @@ impl McpSpriteSheetInput {
             alignment: self.alignment,
             pivot_x: self.pivot_x,
             pivot_y: self.pivot_y,
+            metadata_format: self.metadata_format,
         }
     }
 }

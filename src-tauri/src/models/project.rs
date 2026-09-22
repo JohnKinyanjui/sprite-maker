@@ -72,3 +72,36 @@ pub struct Message {
     pub metadata: serde_json::Value,
     pub created_at: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationLogEntry {
+    pub id: String,
+    pub conversation_id: String,
+    pub request_id: Option<String>,
+    pub level: String,
+    pub category: String,
+    pub event_type: String,
+    pub message: String,
+    pub details: serde_json::Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendConversationLogInput {
+    pub conversation_id: String,
+    pub request_id: Option<String>,
+    pub level: String,
+    pub category: String,
+    pub event_type: String,
+    pub message: String,
+    pub details: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportConversationDebugLogInput {
+    pub conversation_id: String,
+    pub destination_path: String,
+}

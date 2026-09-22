@@ -1,6 +1,6 @@
 use super::{
-    collect_workspace_rig_specs, generation_fingerprint, inspect, read_generation_manifest, safe_category,
-    scan_generation_assets_inner, upsert,
+    collect_workspace_rig_specs, generation_fingerprint, inspect, read_generation_manifest,
+    recover_manifest_from_imagegen_sources, safe_category, scan_generation_assets_inner, upsert,
 };
 use crate::workspace::create_workspace_inner;
 use crate::{database, AppState};
@@ -52,6 +52,10 @@ fn generation_fingerprint_tracks_output_content_not_manifest_rewrites() {
         rig_id: None,
         source: None,
         quality: None,
+        direction_family: None,
+        facing: None,
+        mirrored_from: None,
+        anchor_slug: None,
     };
 
     let original = generation_fingerprint(&root, &manifest).expect("first fingerprint");
@@ -156,6 +160,35 @@ fn lists_workspace_mask_rig_specs_from_json_files() {
 }
 
 #[test]
+fn recover_manifest_prefers_newest_imagegen_source() {
+    let root = std::env::temp_dir().join(format!("sprite-manifest-recover-{}", Uuid::new_v4()));
+    let imagegen = root.join(".sprite-studio/imagegen-sources/fox");
+    std::fs::create_dir_all(&imagegen).expect("imagegen dir");
+    std::fs::create_dir_all(root.join("assets/characters")).expect("assets dir");
+    let older = imagegen.join("draft.png");
+    let newer = imagegen.join("master.png");
+    RgbaImage::from_pixel(4, 4, Rgba([10, 10, 10, 255]))
+        .save(&older)
+        .expect("older save");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    RgbaImage::from_pixel(8, 8, Rgba([20, 20, 20, 255]))
+        .save(&newer)
+        .expect("newer save");
+
+    let manifest = recover_manifest_from_imagegen_sources(&root)
+        .expect("recover")
+        .expect("manifest");
+    assert_eq!(manifest.name, "master");
+    assert!(manifest.source.as_deref().unwrap().contains("imagegen-sources"));
+    assert!(manifest.files[0].starts_with("assets/characters/"));
+    assert!(root.join(&manifest.files[0]).is_file());
+    let rescanned = read_generation_manifest(&root).expect("manifest reload");
+    assert!(rescanned.is_some(), "recovered manifest must pass validation on reload");
+
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
 fn scan_generation_propagates_normalize_errors() {
     let root = std::env::temp_dir().join(format!("sprite-scan-generation-{}", Uuid::new_v4()));
     let project = root.join("game");
@@ -175,7 +208,7 @@ fn scan_generation_propagates_normalize_errors() {
         &state,
     )
     .expect("workspace");
-    let error = scan_generation_assets_inner(&workspace.id, None, &state)
+    let error = scan_generation_assets_inner(&workspace.id, None, None, &state)
         .expect_err("invalid png should fail scan");
     assert!(!error.message.is_empty());
     drop(state);

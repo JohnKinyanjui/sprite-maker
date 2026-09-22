@@ -1,3 +1,4 @@
+use super::headless::apply_std_headless_flags;
 use std::{
     env,
     ffi::{OsStr, OsString},
@@ -218,6 +219,7 @@ pub(crate) fn login_shell_path_with_timeout(shell: &Path, timeout: Duration) -> 
             .args(["-ilc", "printf '\\n__SPRITE_STUDIO_PATH__=%s\\n' \"$PATH\""])
             .stdout(Stdio::from(output_file))
             .stderr(Stdio::null());
+        apply_std_headless_flags(&mut command);
         isolate_login_shell(&mut command);
         let mut child = command.spawn().ok()?;
         let deadline = Instant::now() + timeout;

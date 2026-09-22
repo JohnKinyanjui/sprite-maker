@@ -279,31 +279,6 @@ pub fn rename_asset(id: String, name: String, state: State<'_, AppState>) -> Com
     Ok(asset)
 }
 
-#[tauri::command]
-pub fn delete_asset(id: String, state: State<'_, AppState>) -> CommandResult<()> {
-    let path: String = {
-        let connection = state
-            .db
-            .lock()
-            .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
-        connection
-            .query_row("SELECT path FROM assets WHERE id = ?1", [&id], |row| {
-                row.get(0)
-            })
-            .optional()?
-            .ok_or_else(|| CommandError::new("asset_not_found", "Asset no longer exists"))?
-    };
-    if Path::new(&path).is_file() {
-        std::fs::remove_file(&path)?;
-    }
-    let connection = state
-        .db
-        .lock()
-        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
-    connection.execute("DELETE FROM assets WHERE id = ?1", [id])?;
-    Ok(())
-}
-
 pub fn get_asset(state: &AppState, id: &str) -> CommandResult<Asset> {
     let connection = state
         .db

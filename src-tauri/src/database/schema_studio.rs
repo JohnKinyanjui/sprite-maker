@@ -255,3 +255,41 @@ pub(crate) fn migrate_v12(transaction: &Transaction<'_>) -> CommandResult<()> {
         .map_err(|error| CommandError::new("migration_failed", error.to_string()))?;
     Ok(())
 }
+
+pub(crate) fn migrate_v13(transaction: &Transaction<'_>) -> CommandResult<()> {
+    transaction
+        .execute_batch(
+            r#"
+        ALTER TABLE animations ADD COLUMN review_status TEXT NOT NULL DEFAULT 'draft';
+
+        INSERT INTO migrations(version, applied_at) VALUES (13, datetime('now'));
+        "#,
+        )
+        .map_err(|error| CommandError::new("migration_failed", error.to_string()))?;
+    Ok(())
+}
+
+pub(crate) fn migrate_v14(transaction: &Transaction<'_>) -> CommandResult<()> {
+    transaction
+        .execute_batch(
+            r#"
+        CREATE TABLE IF NOT EXISTS conversation_log_entries (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          request_id TEXT,
+          level TEXT NOT NULL DEFAULT 'info',
+          category TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          message TEXT NOT NULL,
+          details_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_log_entries_conversation
+          ON conversation_log_entries(conversation_id, created_at);
+
+        INSERT INTO migrations(version, applied_at) VALUES (14, datetime('now'));
+        "#,
+        )
+        .map_err(|error| CommandError::new("migration_failed", error.to_string()))?;
+    Ok(())
+}

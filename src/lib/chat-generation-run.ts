@@ -14,7 +14,7 @@ import {
 } from "$lib/manifest-path";
 import {
   extractAnimateMotion, formatBlockingQualityNotice, orchestrateRigOnlyAnimation,
-  resolveLatestCharacterAsset, resolveMasterFromManifest, validatePolishedFrame,
+  resolveMasterAfterProviderMasterPhase, validatePolishedFrame,
 } from "$lib/rig-animation-orchestrator";
 import type { Animation, AnimationPolishMode, Asset, AssetPack, Conversation, GenerationManifest, Message, ProviderRequestOptions, Rig, Worktree } from "$lib/types";
 
@@ -241,6 +241,11 @@ export async function runNativeRigChatAnimation(input: NativeRigChatInput): Prom
   return { request, messages, completion, renamed };
 }
 
+export type MasterContinuationFailure = {
+  reason: string;
+  details: Record<string, unknown>;
+};
+
 /** After a master-only provider pass, continue with native rig orchestration on the new master. */
 export async function continueNativeRigAfterMaster(
   prior: ActiveChatRequest,
@@ -255,9 +260,15 @@ export async function continueNativeRigAfterMaster(
   onFitWarning?: (message: string) => void,
   masterResponse?: string,
   parallelGenerationActive = false,
-): Promise<{ completion: ChatGenerationCompletion; messages: Message[] } | undefined> {
-  const manifest = await api.getGenerationManifest(prior.workspaceId).catch(() => null);
-  const fingerprint = manifest ? await api.getGenerationFingerprint(prior.workspaceId).catch(() => null) : null;
+): Promise<{ completion: ChatGenerationCompletion; messages: Message[] } | { failure: MasterContinuationFailure }> {
+  const responsePaths = masterResponse ? extractAssetPathsFromResponse(masterResponse) : [];
+  let manifest = await api.getGenerationManifest(prior.workspaceId).catch(() => null);
+  let fingerprint = manifest ? await api.getGenerationFingerprint(prior.workspaceId).catch(() => null) : null;
+  const scanned = await api.scanGenerationAssets(prior.workspaceId, worktreeId ?? prior.worktreeId).catch(() => [] as Asset[]);
+  if (!manifest) {
+    manifest = await api.getGenerationManifest(prior.workspaceId).catch(() => null);
+    fingerprint = manifest ? await api.getGenerationFingerprint(prior.workspaceId).catch(() => null) : null;
+  }
   const freshManifest = isFreshGenerationManifest(
     manifest,
     fingerprint,
@@ -266,21 +277,47 @@ export async function continueNativeRigAfterMaster(
     masterResponse,
     parallelGenerationActive,
   );
-  let master: Asset | undefined;
-  if (freshManifest) {
-    const scanned = await api.scanGenerationAssets(prior.workspaceId);
-    master = resolveMasterFromManifest(manifest, scanned)
-      ?? resolveLatestCharacterAsset(scanned);
-  } else if (masterResponse && !reportsGenerationFailure(masterResponse)) {
-    // Keep the required native continuation/card working when a provider writes the
-    // final assets path but omits the manifest despite the handoff contract.
-    const responsePaths = extractAssetPathsFromResponse(masterResponse);
-    if (responsePaths.length) {
-      const scanned = await api.scanAssets(prior.workspaceId);
-      master = resolveLatestCharacterAsset(assetsFromManifestPaths(scanned, responsePaths));
-    }
+  const manifestChanged = Boolean(fingerprint && fingerprint !== prior.previousGenerationFingerprint);
+  let library = mergeGeneratedAssets(
+    currentAssets ?? [],
+    mergeGeneratedAssets(scanned, await api.listAssets(prior.workspaceId).catch(() => [])),
+  );
+  let master = resolveMasterAfterProviderMasterPhase({
+    manifest,
+    freshManifest,
+    manifestChanged,
+    scanned,
+    library,
+    responsePaths,
+  });
+  if (!master && responsePaths.length) {
+    const fullScan = await api.scanAssets(prior.workspaceId).catch(() => [] as Asset[]);
+    library = mergeGeneratedAssets(library, fullScan);
+    master = resolveMasterAfterProviderMasterPhase({
+      manifest,
+      freshManifest,
+      manifestChanged,
+      scanned,
+      library,
+      responsePaths,
+    });
   }
-  if (!master) return;
+  if (!master) {
+    const hasGenerationSignal = freshManifest || manifestChanged || scanned.length > 0 || responsePaths.length > 0;
+    return {
+      failure: {
+        reason: hasGenerationSignal ? "master_not_found" : "manifest_not_fresh",
+        details: {
+          freshManifest,
+          manifestChanged,
+          manifestName: manifest?.name ?? null,
+          scannedCount: scanned.length,
+          responsePaths,
+          parallelGenerationActive,
+        },
+      },
+    };
+  }
   const motion = prior.motion ?? extractAnimateMotion(prior.prompt);
   const profile = {
     profileVersion: 8,
@@ -323,7 +360,7 @@ export async function continueNativeRigAfterMaster(
 export type MasterPhaseContinuation =
   | { kind: "rig-complete"; completion: ChatGenerationCompletion; messages: Message[] }
   | { kind: "handoff-started"; request: ActiveChatRequest; messages: Message[]; renamed?: Conversation }
-  | { kind: "finalize-fallback" };
+  | { kind: "finalize-fallback"; reason: string; details?: Record<string, unknown> };
 
 /** Continue native rig and optional polish handoff after a master-only provider pass. */
 export async function continueAfterMasterProviderPhase(input: {
@@ -356,7 +393,13 @@ export async function continueAfterMasterProviderPhase(input: {
     input.masterResponse,
     input.parallelGenerationActive ?? false,
   );
-  if (!continued) return { kind: "finalize-fallback" };
+  if ("failure" in continued) {
+    return {
+      kind: "finalize-fallback",
+      reason: continued.failure.reason,
+      details: continued.failure.details,
+    };
+  }
 
   const polishMode = input.prior.polishMode ?? "rig";
   const handoff = continued.completion.handoff;
@@ -497,7 +540,7 @@ export async function completeChatGeneration(
       polishWarning = "AI polish finished but frame validation could not complete — review the animation frames.";
     }
   }
-  const generatedAssets = freshManifest ? await api.scanGenerationAssets(request.workspaceId) : [];
+  const generatedAssets = freshManifest ? await api.scanGenerationAssets(request.workspaceId, request.worktreeId) : [];
   let nextAssets = mergeGeneratedAssets(current.assets, generatedAssets);
   const nextPacks = await api.listAssetPacks(request.workspaceId).catch(() => current.packs);
   const generatedPack = findGeneratedPack(request.command, nextPacks, request.knownPackIds, response);

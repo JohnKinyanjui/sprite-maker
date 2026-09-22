@@ -9,22 +9,22 @@ use rusqlite::{params, OptionalExtension};
 pub(super) const ANALYZER_VERSION: &str = "native-v1";
 
 #[derive(Clone)]
-pub(super) struct FrameMetrics {
-    pub(super) asset_id: String,
-    pub(super) content_hash: String,
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) bounds: Option<(u32, u32, u32, u32)>,
-    pub(super) centroid: Option<(f64, f64)>,
-    pub(super) alpha_coverage: f64,
+pub(crate) struct FrameMetrics {
+    pub(crate) asset_id: String,
+    pub(crate) content_hash: String,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) bounds: Option<(u32, u32, u32, u32)>,
+    pub(crate) centroid: Option<(f64, f64)>,
+    pub(crate) alpha_coverage: f64,
     pub(super) opaque_edge_pixels: u32,
-    pub(super) perceptual_hash: u64,
+    pub(crate) perceptual_hash: u64,
     pub(super) palette: (f64, f64, f64),
 }
 
-pub(super) struct AnalyzedFrame {
-    pub(super) metrics: FrameMetrics,
-    pub(super) image: RgbaImage,
+pub(crate) struct AnalyzedFrame {
+    pub(crate) metrics: FrameMetrics,
+    pub(crate) image: RgbaImage,
 }
 
 pub(super) struct PendingCheck {
@@ -43,7 +43,7 @@ pub(super) fn content_hash(path: &str) -> CommandResult<String> {
     Ok(blake3::hash(&std::fs::read(path)?).to_hex().to_string())
 }
 
-pub(super) fn compute_metrics(asset_id: &str, path: &str) -> CommandResult<AnalyzedFrame> {
+pub(crate) fn compute_metrics(asset_id: &str, path: &str) -> CommandResult<AnalyzedFrame> {
     let image = image::open(path)?.to_rgba8();
     let (width, height) = image.dimensions();
     let mut minimum_x = width;
@@ -263,7 +263,7 @@ pub(super) fn load_cached_metrics(
     }))
 }
 
-pub(super) fn pixel_difference(first: &RgbaImage, second: &RgbaImage) -> f64 {
+pub(crate) fn pixel_difference(first: &RgbaImage, second: &RgbaImage) -> f64 {
     let width = first.width().max(second.width()).max(1);
     let height = first.height().max(second.height()).max(1);
     let first = image::imageops::resize(first, width, height, FilterType::Nearest);
@@ -287,7 +287,7 @@ pub(super) fn palette_distance(first: &FrameMetrics, second: &FrameMetrics) -> f
     .sqrt()
 }
 
-pub(super) fn centroid_distance(first: &FrameMetrics, second: &FrameMetrics) -> f64 {
+pub(crate) fn centroid_distance(first: &FrameMetrics, second: &FrameMetrics) -> f64 {
     match (first.centroid, second.centroid) {
         (Some(first), Some(second)) => {
             ((first.0 - second.0).powi(2) + (first.1 - second.1).powi(2)).sqrt()
@@ -296,7 +296,7 @@ pub(super) fn centroid_distance(first: &FrameMetrics, second: &FrameMetrics) -> 
     }
 }
 
-pub(super) fn bounds_area(metrics: &FrameMetrics) -> f64 {
+pub(crate) fn bounds_area(metrics: &FrameMetrics) -> f64 {
     metrics
         .bounds
         .map(|(minimum_x, minimum_y, maximum_x, maximum_y)| {

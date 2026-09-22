@@ -335,6 +335,16 @@ export function clearRunningRequest(
   return next;
 }
 
+/** Drop any active request for a conversation (e.g. after native-rig id swap). */
+export function clearConversationRunningRequest(
+  runningRequests: Record<string, ActiveChatRequest>,
+  conversationId: string,
+): Record<string, ActiveChatRequest> {
+  const next = { ...runningRequests };
+  delete next[conversationId];
+  return next;
+}
+
 const POLISH_MODE_PATTERN = /Polish mode:[^.]+\./gi;
 
 /** Finish instruction sentence embedded in `/animate` prompts. */

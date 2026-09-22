@@ -135,6 +135,21 @@ pub struct MotionPlan {
     pub phases: Vec<MotionPhase>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefineGenerationPromptInput {
+    pub conversation_id: String,
+    pub draft: String,
+    pub context: Option<String>,
+    pub command: Option<String>,
+    pub generation: Option<GenerationOptions>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub animation_mode: Option<String>,
+    #[serde(default)]
+    pub reference_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRequestOptions {
@@ -181,6 +196,14 @@ pub struct GenerationManifest {
     pub source: Option<String>,
     #[serde(default)]
     pub quality: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facing: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrored_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_slug: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

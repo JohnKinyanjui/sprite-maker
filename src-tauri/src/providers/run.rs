@@ -6,10 +6,11 @@ use super::image_providers::{is_provider_native_image, load_image_provider};
 use super::modes::provider_is_authenticated;
 use super::stream::{provider_auth_help, provider_display_name};
 use crate::{
-    conversations::{add_message, get_conversation},
+    conversations::{add_message, append_conversation_log, get_conversation},
     error::{CommandError, CommandResult},
     models::ProviderRequestOptions,
     references,
+    pipeline::anchor_contract_text,
     sprite_harness::studio_prompt,
     workspace::workspace_path,
     AppState,
@@ -131,6 +132,24 @@ pub(crate) fn start_provider_run(
     )?;
     let assistant = add_message(state, &conversation_id, "assistant", "text", "", "running")?;
     let request_id = Uuid::new_v4().to_string();
+    append_conversation_log(
+        state,
+        &conversation_id,
+        Some(&request_id),
+        "info",
+        "chat",
+        "user_message",
+        &prompt,
+        serde_json::json!({
+            "provider": provider_id,
+            "model": options.model,
+            "reasoningEffort": options.reasoning_effort,
+            "command": options.command,
+            "referenceCount": options.reference_ids.len(),
+            "assistantMessageId": assistant.id,
+            "imageProviderId": options.image_provider_id,
+        }),
+    )?;
     let (cancel_tx, cancel_rx) = oneshot::channel();
     state
         .cancellers
@@ -150,6 +169,12 @@ pub(crate) fn start_provider_run(
     let task_state = state.clone();
     let task_request_id = request_id.clone();
     let image_prompt = format!("{prompt}\n\n{combined_context}\n\nCreate one clean, centered, motion-ready game-art source master. Use a plain removable background, clear silhouette, and no text, labels, contact sheet, or multiple poses.");
+    let anchor_contract = anchor_contract_text(&conversation.workspace_id, state);
+    let anchor_section = if anchor_contract.is_empty() {
+        None
+    } else {
+        Some(anchor_contract)
+    };
     let run = ProviderRun {
         request_id: task_request_id,
         conversation_id,
@@ -162,6 +187,7 @@ pub(crate) fn start_provider_run(
             options.generation.as_ref(),
             options.command.as_deref(),
             Some(provider_id.as_str()),
+            anchor_section.as_deref(),
             options.native_rig_master_only,
         ),
         model: options.model,

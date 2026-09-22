@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { contentWithoutSpriteOutputLinks, inferMessageGeneration, inferMessagePack, reportsGenerationFailure, reportsGenerationWarning } from "../src/lib/message-generations";
+import { contentWithoutSpriteOutputLinks, inferMessageGeneration, inferMessagePack, reportsGenerationFailure, reportsGenerationWarning, reportsStaticSpriteOnlyIntent } from "../src/lib/message-generations";
 import type { Animation, Asset, AssetPack, Message } from "../src/lib/types";
 
 const asset = (id: string, name: string): Asset => ({
@@ -83,6 +83,54 @@ describe("inferMessageGeneration", () => {
     );
     expect(result?.assetIds).toEqual(["m1", "s1"]);
     expect(result?.animationId).toBeUndefined();
+    expect(result?.fps).toBe(1);
+  });
+
+  test("does not bind an older animation when the assistant delivered only a rig master", () => {
+    const master = {
+      ...asset("m1", "master"),
+      relativePath: ".sprite-studio/imagegen-sources/stalker-idle/master.png",
+      path: "/workspace/.sprite-studio/imagegen-sources/stalker-idle/master.png",
+    };
+    const walkFrames = Array.from({ length: 32 }, (_, index) => asset(`w${index + 1}`, `stalker_walk_down_${String(index + 1).padStart(2, "0")}`));
+    const animations: Animation[] = [{
+      id: "walk", workspaceId: "workspace", name: "stalker_walk_down", fps: 12,
+      looping: true, frames: walkFrames.map(item => ({ assetId: item.id })), createdAt: "now", updatedAt: "now",
+    }];
+    const completed = message(
+      "Ho creato il master stalker in .sprite-studio/imagegen-sources/stalker-idle/master.png (32x32, pronto per la riggatura). Nessun frame/rig generato in questo passaggio.",
+    );
+    expect(reportsStaticSpriteOnlyIntent(completed.content)).toBe(true);
+    expect(inferMessageGeneration(completed, [master, ...walkFrames], animations)).toEqual({
+      kind: "sprite-generation",
+      name: "master",
+      category: "creatures",
+      fps: 1,
+      assetIds: ["m1"],
+    });
+  });
+
+  test("strips stale animation metadata when the assistant reports a static master only", () => {
+    const master = asset("m1", "stalker_master");
+    const walkFrames = [asset("w1", "stalker_walk_down_01"), asset("w2", "stalker_walk_down_02")];
+    const animations: Animation[] = [{
+      id: "walk", workspaceId: "workspace", name: "stalker_walk_down", fps: 12,
+      looping: true, frames: walkFrames.map(item => ({ assetId: item.id })), createdAt: "now", updatedAt: "now",
+    }];
+    const completed = message("Master stalker salvato. Nessun frame generato in questo passaggio.");
+    completed.metadata = {
+      generation: {
+        kind: "sprite-generation",
+        name: "stalker_walk_down",
+        category: "creatures",
+        fps: 12,
+        assetIds: ["w1", "w2"],
+        animationId: "walk",
+      },
+    };
+    const result = inferMessageGeneration(completed, [master, ...walkFrames], animations);
+    expect(result?.animationId).toBeUndefined();
+    expect(result?.assetIds).toEqual(["w1", "w2"]);
     expect(result?.fps).toBe(1);
   });
 

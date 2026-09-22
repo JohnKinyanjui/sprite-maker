@@ -112,27 +112,60 @@ fn builtin_styles_cover_named_presets() {
 }
 
 #[test]
-fn tool_router_exposes_phase_one_and_two_tools() {
+fn tool_router_exposes_pipeline_tools() {
     let mut names: Vec<String> = SpriteStudioMcp::listed_tool_names();
     names.sort();
     assert_eq!(
         names,
         [
+            "align_frames",
+            "analyze_rig_fit",
             "attach_references",
             "cancel_generation",
+            "check_anchor_facing",
+            "check_character_contract",
+            "check_size_contract",
+            "clean_alpha",
             "ensure_conversation",
             "export",
+            "export_character_pack",
+            "extract_video_frames",
+            "finalize_contract_retry",
             "generate",
+            "get_anchor",
+            "get_character_profile",
             "get_generation",
             "get_job",
+            "get_production_score",
+            "harden_animation",
+            "interpolate_rig_frames",
+            "list_anchors",
             "list_artifacts",
             "list_assets",
+            "list_facing_checks",
             "list_packs",
+            "mirror_animation",
+            "normalize_animation",
             "open_workspace",
+            "orient_anchor",
+            "promote_anchor",
             "quality_report",
+            "queue_contract_retry",
+            "queue_direction_set",
+            "queue_motion_batch",
             "queue_procedural_vfx",
+            "queue_region_regen",
             "queue_sprite_sheet",
+            "render_rig_animation",
+            "retry_size_contract",
+            "save_rig",
+            "score_animation_frames",
+            "score_strip",
+            "set_animation_review_status",
+            "snap_to_pixel_grid",
+            "split_strip",
             "studio_status",
+            "suggest_rig_points",
         ]
     );
 }
@@ -210,6 +243,7 @@ fn export_rejects_unknown_kind() {
             name: None,
             tile_width: None,
             tile_height: None,
+            export_format: None,
         },
     )
     .expect_err("unknown kind");

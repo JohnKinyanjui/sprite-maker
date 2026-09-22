@@ -1,4 +1,5 @@
 use crate::error::CommandResult;
+use crate::providers::apply_std_headless_flags;
 use serde::{Deserialize, Serialize};
 use std::{
     path::Path,
@@ -91,6 +92,7 @@ fn verify_python(program: &str, args: &[String]) -> bool {
         .arg("--version")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    apply_std_headless_flags(&mut command);
     let output = match command.output() {
         Ok(output) => output,
         Err(_) => return false,

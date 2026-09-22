@@ -44,6 +44,7 @@ fn copy_project_rows(
         ("worktrees", "project_id=?1"),
         ("conversations", "workspace_id=?1"),
         ("messages", "conversation_id IN (SELECT id FROM project_backup.conversations WHERE workspace_id=?1)"),
+        ("conversation_log_entries", "conversation_id IN (SELECT id FROM project_backup.conversations WHERE workspace_id=?1)"),
         ("generations", "workspace_id=?1"),
         ("assets", "workspace_id=?1"),
         ("asset_worktrees", "asset_id IN (SELECT id FROM project_backup.assets WHERE workspace_id=?1)"),
@@ -69,6 +70,14 @@ fn copy_project_rows(
         ("frame_quality_cache", "asset_id IN (SELECT id FROM project_backup.assets WHERE workspace_id=?1)"),
         ("animation_revisions", "animation_id IN (SELECT id FROM project_backup.animations WHERE workspace_id=?1)"),
     ] {
+        let exists: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM project_backup.sqlite_master WHERE type='table' AND name=?1",
+            [table],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            continue;
+        }
         transaction.execute(
             &format!("INSERT INTO {table} SELECT * FROM project_backup.{table} WHERE {predicate}"),
             [project_id],

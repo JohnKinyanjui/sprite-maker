@@ -1,5 +1,6 @@
 use super::antigravity_stream::parse_antigravity_line;
 use super::cursor_stream::parse_cursor_line;
+use crate::conversations::append_provider_event_log;
 use crate::models::ProviderEvent;
 use crate::AppState;
 use tauri::{AppHandle, Emitter};
@@ -19,6 +20,13 @@ pub(crate) fn emit(
         content: content.into(),
     };
     state.record_provider_event(&event);
+    append_provider_event_log(
+        state,
+        request_id,
+        conversation_id,
+        event_type,
+        &event.content,
+    );
     if let Some(app) = app {
         let _ = app.emit("provider-event", event);
     }

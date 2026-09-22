@@ -21,17 +21,18 @@ fn job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackgroundJob> {
         error_message: row.get(9)?,
         cancel_requested: row.get(10)?,
         result_path: row.get(11)?,
-        created_at: row.get(12)?,
-        started_at: row.get(13)?,
-        completed_at: row.get(14)?,
-        updated_at: row.get(15)?,
+        metadata_json: row.get(12)?,
+        created_at: row.get(13)?,
+        started_at: row.get(14)?,
+        completed_at: row.get(15)?,
+        updated_at: row.get(16)?,
     })
 }
 
 fn select_job() -> &'static str {
     r#"SELECT id, project_id, worktree_id, kind, target_type, target_id, status,
               progress, stage, error_message, cancel_requested, result_path,
-              created_at, started_at, completed_at, updated_at
+              metadata_json, created_at, started_at, completed_at, updated_at
        FROM background_jobs"#
 }
 
@@ -46,7 +47,7 @@ pub(crate) fn load_job(state: &AppState, id: &str) -> CommandResult<BackgroundJo
         .ok_or_else(|| CommandError::new("job_not_found", "The background job no longer exists"))
 }
 
-pub(super) fn emit_job(
+pub(crate) fn emit_job(
     app: Option<&tauri::AppHandle>,
     state: &AppState,
     id: &str,
@@ -100,6 +101,25 @@ pub(crate) fn set_job_state(
     emit_job(app, state, id)
 }
 
+pub(crate) fn set_job_metadata(
+    app: Option<&tauri::AppHandle>,
+    state: &AppState,
+    id: &str,
+    metadata_json: &str,
+) -> CommandResult<BackgroundJob> {
+    let now = Utc::now().to_rfc3339();
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    connection.execute(
+        "UPDATE background_jobs SET metadata_json=?2, updated_at=?3 WHERE id=?1",
+        params![id, metadata_json, now],
+    )?;
+    drop(connection);
+    emit_job(app, state, id)
+}
+
 pub(crate) fn cancellation_requested(state: &AppState, id: &str) -> CommandResult<bool> {
     let connection = state
         .db
@@ -138,6 +158,25 @@ pub fn list_jobs(
         jobs.extend(rows.filter_map(Result::ok));
     }
     Ok(jobs)
+}
+
+pub(crate) fn request_job_cancellation(state: &AppState, id: &str) -> CommandResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let connection = state
+        .db
+        .lock()
+        .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
+    connection.execute(
+        r#"UPDATE background_jobs
+           SET cancel_requested=1,
+               status=CASE WHEN status='queued' THEN 'cancelled' ELSE status END,
+               stage=CASE WHEN status='queued' THEN 'Cancelled' ELSE 'Cancelling' END,
+               completed_at=CASE WHEN status='queued' THEN ?2 ELSE completed_at END,
+               updated_at=?2
+           WHERE id=?1 AND status IN ('queued','running','analyzing')"#,
+        params![id, now],
+    )?;
+    Ok(())
 }
 
 #[tauri::command]

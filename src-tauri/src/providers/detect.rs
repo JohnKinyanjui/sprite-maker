@@ -5,13 +5,23 @@ use super::modes::{
     grok_modes_from_output,
 };
 use super::probes::{command_output, AuthCheck, ProbeOutcome};
+use crate::error::{CommandError, CommandResult};
 use crate::models::{ProviderCapabilities, ProviderStatus};
 use crate::AppState;
 use tauri::State;
 
 #[tauri::command]
-pub fn detect_providers(state: State<'_, AppState>) -> Vec<ProviderStatus> {
-    detect_providers_inner(&state)
+pub async fn detect_providers(state: State<'_, AppState>) -> CommandResult<Vec<ProviderStatus>> {
+    let state = state.inner().clone();
+    let providers = tauri::async_runtime::spawn_blocking(move || detect_providers_inner(&state))
+        .await
+        .map_err(|error| {
+            CommandError::new(
+                "process_error",
+                format!("Provider detection interrupted: {error}"),
+            )
+        })?;
+    Ok(providers)
 }
 
 pub(crate) fn detect_providers_inner(state: &AppState) -> Vec<ProviderStatus> {

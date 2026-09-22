@@ -1,9 +1,11 @@
 mod biped_template;
 mod commands;
+mod interpolate;
 mod creature_templates;
 mod fit;
 mod ik;
 mod mesh;
+mod mirror;
 mod object_templates;
 mod render;
 mod skin;
@@ -25,6 +27,12 @@ pub use commands::{
 };
 #[allow(unused_imports)]
 pub use fit::{MorphologyScore, RigFitReport};
+pub use interpolate::{
+    __cmd__interpolate_rig_animation_frames, __cmd__interpolate_rig_frames,
+    __tauri_command_name_interpolate_rig_animation_frames,
+    __tauri_command_name_interpolate_rig_frames, interpolate_rig_animation_frames,
+    interpolate_rig_frames,
+};
 pub use render::{
     __cmd__render_rig_animation, __cmd__render_rig_preview,
     __tauri_command_name_render_rig_animation, __tauri_command_name_render_rig_preview,
@@ -40,9 +48,11 @@ pub use types::{
 #[allow(unused_imports)]
 pub use validate::validate_rig;
 
-pub(crate) use commands::capture_chat_suggestion;
+pub(crate) use commands::{capture_chat_suggestion, load_rig_by_id};
 #[allow(unused_imports)]
-pub(crate) use commands::save_rig_inner;
+pub(crate) use commands::{
+    analyze_rig_fit_inner, render_rig_animation_blocking, save_rig_inner, suggest_rig_points_inner,
+};
 #[allow(unused_imports)]
 pub(crate) use fit::{capsule_coverage, detect_morphology};
 #[allow(unused_imports)]
@@ -50,7 +60,14 @@ pub(crate) use ik::{
     build_ownership, owned_bounds, point_positions, point_segment_distance, Affine,
 };
 #[allow(unused_imports)]
+pub(crate) use mirror::{mirror_rig_frame, mirror_rig_frames, resolve_rig_for_animation};
+#[allow(unused_imports)]
 pub(crate) use render::render_rig_animation_inner;
+#[allow(unused_imports)]
+pub(crate) use interpolate::{
+    interpolate_rig_frame, interpolate_rig_frame_at, interpolate_rig_frames_between,
+    interpolate_rig_frames_inner, InterpolateRigFramesInput,
+};
 #[allow(unused_imports)]
 pub(crate) use skin::render_frames;
 #[allow(unused_imports)]
@@ -66,6 +83,12 @@ mod render_frame;
 pub(crate) use render_frame::render_frame;
 
 #[cfg(test)]
+mod interpolate_tests;
+#[cfg(test)]
+mod mirror_tests;
+#[cfg(test)]
 mod deform_tests;
+#[cfg(test)]
+mod ik_tests;
 #[cfg(test)]
 mod tests;

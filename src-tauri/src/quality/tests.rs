@@ -1,5 +1,7 @@
 use super::alignment::align_frame_to_canvas;
-use super::interpolation::{interpolate_rgba, interpolation_neighbors, rebalance_motion_plan};
+use super::interpolation::{
+    interpolate_motion_aware_rgba, interpolate_rgba, interpolation_neighbors, rebalance_motion_plan,
+};
 use super::metrics::{compute_metrics, pixel_difference, AnalyzedFrame, FrameMetrics};
 use super::motion_checks::{
     leg_alternation_checks, limb_shading_checks, lower_body_view, LowerBodyView,
@@ -64,6 +66,125 @@ fn interpolation_creates_a_true_midpoint_frame() {
     let second = RgbaImage::from_pixel(2, 2, Rgba([220, 140, 100, 200]));
     let transition = interpolate_rgba(&first, &second).expect("frames should interpolate");
     assert_eq!(transition.get_pixel(0, 0), &Rgba([120, 90, 80, 100]));
+}
+
+#[test]
+fn rig_frame_interpolation_averages_root_motion() {
+    use crate::rig::interpolate_rig_frame;
+    use crate::rig::{RigContact, RigFrame, RigTransform};
+
+    let left = RigFrame {
+        phase: Some("contact".into()),
+        hold: false,
+        root_dx: 0.0,
+        root_dy: 0.0,
+        transforms: vec![RigTransform {
+            bone: "torso".into(),
+            dx: 0.0,
+            dy: 0.0,
+            rotate: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+        }],
+        contacts: vec![RigContact {
+            bone: "foot".into(),
+            x: 10.0,
+            y: 30.0,
+            bend: 1.0,
+        }],
+    };
+    let right = RigFrame {
+        phase: Some("pass".into()),
+        hold: false,
+        root_dx: 4.0,
+        root_dy: -2.0,
+        transforms: vec![RigTransform {
+            bone: "torso".into(),
+            dx: 2.0,
+            dy: 1.0,
+            rotate: 10.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+        }],
+        contacts: vec![RigContact {
+            bone: "foot".into(),
+            x: 14.0,
+            y: 28.0,
+            bend: 1.0,
+        }],
+    };
+    let midpoint = interpolate_rig_frame(&left, &right);
+    assert_eq!(midpoint.root_dx, 2.0);
+    assert_eq!(midpoint.transforms[0].dx, 1.0);
+    assert_eq!(midpoint.contacts[0].x, 12.0);
+}
+
+#[test]
+fn rig_transition_returns_none_without_manifest_rig() {
+    use super::rig_bridge::try_render_rig_transition;
+    use crate::{
+        animations::save_animation_inner,
+        assets::{inspect, upsert},
+        database,
+        models::{AnimationFrame, AnimationInput},
+        workspace::create_workspace_inner,
+        AppState,
+    };
+
+    let root = std::env::temp_dir().join(format!("sprite-rig-bridge-{}", Uuid::new_v4()));
+    let project = root.join("game");
+    std::fs::create_dir_all(project.join("assets/characters")).expect("asset dir");
+    let connection = database::open(&root.join("app.sqlite3")).expect("db");
+    let state = AppState::from_connection(connection);
+    let workspace = create_workspace_inner(
+        "Game".into(),
+        project.to_string_lossy().into_owned(),
+        &state,
+    )
+    .expect("workspace");
+    let path = project.join("assets/characters/frame.png");
+    RgbaImage::from_pixel(8, 8, Rgba([255, 0, 0, 255]))
+        .save(&path)
+        .expect("frame");
+    let asset = inspect(&workspace.id, &project, &path, None).expect("inspect");
+    upsert(&state, &asset, "test").expect("upsert");
+    let animation = save_animation_inner(
+        AnimationInput {
+            id: None,
+            workspace_id: workspace.id.clone(),
+            worktree_id: None,
+            name: "Walk".into(),
+            fps: 8.0,
+            looping: true,
+            frames: vec![AnimationFrame {
+                asset_id: asset.id,
+                duration_ms: None,
+                offset_x: 0,
+                offset_y: 0,
+            }],
+            motion_plan: None,
+            review_status: Some("draft".into()),
+        },
+        &state,
+    )
+    .expect("save");
+    let rendered = try_render_rig_transition(&state, &animation, 0, 0)
+        .expect("rig bridge should not error");
+    assert!(rendered.is_none());
+    drop(state);
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn motion_aware_interpolation_aligns_offsets_before_blending() {
+    let mut first = RgbaImage::new(8, 8);
+    first.put_pixel(2, 4, Rgba([255, 0, 0, 255]));
+    let mut second = RgbaImage::new(8, 8);
+    second.put_pixel(6, 4, Rgba([0, 0, 255, 255]));
+    let naive = interpolate_rgba(&first, &second).expect("naive");
+    let motion = interpolate_motion_aware_rgba(&first, &second, (0, 0), (4, 0)).expect("motion");
+    assert_ne!(naive.as_raw(), motion.as_raw());
+    assert_eq!(motion.get_pixel(4, 4)[0], 127);
 }
 
 #[test]
@@ -252,6 +373,31 @@ fn hop_dominant_cycles_flag_as_lost_leg_alternation() {
 }
 
 #[test]
+fn contract_violations_map_to_quality_checks() {
+    use super::contract_bridge::contract_violations_to_pending_checks;
+    use crate::models::SizeContractViolation;
+
+    let checks = contract_violations_to_pending_checks(&[
+        SizeContractViolation {
+            code: "canvas_size".into(),
+            message: "Frame 1 is 62x64 but anchor requires 64x64".into(),
+            blocking: true,
+            frame_index: Some(0),
+        },
+        SizeContractViolation {
+            code: "motion_still".into(),
+            message: "Frame 2 is nearly identical to frame 1".into(),
+            blocking: false,
+            frame_index: Some(1),
+        },
+    ]);
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0].check_type, "dimensions");
+    assert_eq!(checks[0].repair_action, Some("contract_auto_fix"));
+    assert_eq!(checks[1].check_type, "sudden_change");
+    assert_eq!(checks[1].repair_action, Some("regenerate_transition"));
+}
+
 fn alternating_run_cycles_with_gathered_flights_stay_clean() {
     let analyzed = vec![
         walker_frame(FAR_LEG, NEAR_LEG, false),

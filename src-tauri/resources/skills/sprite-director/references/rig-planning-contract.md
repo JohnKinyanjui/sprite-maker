@@ -74,21 +74,13 @@ Author new articulated rigs with `"rigVersion": 3` and the anatomy-specific prof
 
 Version 3 validation must reject a mismatched profile, missing or unsupported visible joints, missing named key poses, residual pixels left inside bone envelopes, morphology-incompatible roles, unknown targets, missing/cyclic parents, missing attachment/contact anchors, separated attachment anchors, moving planted anchors, conflicting pixel ownership, uncovered or invalid weighted meshes, rigid one-piece quadruped limbs, imperceptible transform ranges, unexplained duplicate frame hashes, clipped visible pixels, and a final-to-first root, joint, contact, silhouette, or depth discontinuity larger than an ordinary adjacent transition. The final frame must not duplicate the first, even when another frame is an intentional hold.
 
-Save that proposal as the rig JSON under `.sprite-studio/rigs/`. Then validate it without producing frames:
-
-```bash
-python3 .sprite-studio/sprite_rig.py --validate .sprite-studio/rigs/<slug>.json
-```
+Save that proposal as the rig JSON under `.sprite-studio/rigs/`. Then validate it without producing frames using MCP **`analyze_rig_fit`** on the master `assetId` (or **`save_rig`** followed by fit analysis).
 
 Treat version 1 validation warnings about overlapping masks as review work. Tighten masks or mark `allowOverlap: true` only for intentional joint coverage. Version 2 uses exclusive ownership and the bounded `overlapMode: "joint-cap"` exception above. Validation errors must be fixed before rendering.
 
 ## Stage 2 — deterministic render
 
-After validation passes, run:
-
-```bash
-python3 .sprite-studio/sprite_rig.py .sprite-studio/rigs/<slug>.json
-```
+After validation passes, call MCP **`render_rig_animation`** to emit frame PNGs and the draft animation.
 
 The tool records a SHA-256 hash of the locked master in the saved rig and generation manifest. If that master changes, the rig must refuse to render; create a named rig revision instead. Every output frame must therefore be a deterministic transform of pixels from the same verified master.
 

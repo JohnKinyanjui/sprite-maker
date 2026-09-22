@@ -1,13 +1,21 @@
 use crate::{
-    animations::resolve_animation_frames,
+    animations::{
+        export_metadata::{
+            anchor_meta_from_character, build_metadata_payload, default_anchor_meta,
+            godot_texture_path_for_workspace, metadata_extension, normalize_export_format,
+            write_metadata_file, PreparedFrame, PreparedStripExport, SpriteSheetGridMeta,
+        },
+        resolve_animation_frames,
+    },
     assets::get_asset,
     error::{CommandError, CommandResult},
     models::{AnimationFrame, SpriteSheet, SpriteSheetInput},
+    pipeline::{blit_with_offset, get_anchor_inner, list_anchors_inner},
     workspace::workspace_path,
     AppState,
 };
 use chrono::Utc;
-use image::{imageops::FilterType, GenericImage, Rgba, RgbaImage};
+use image::{imageops::FilterType, Rgba, RgbaImage};
 use rusqlite::{params, OptionalExtension};
 use uuid::Uuid;
 
@@ -116,8 +124,22 @@ pub(super) fn render_sprite_sheet(
     } else {
         Rgba([0, 0, 0, 255])
     };
+    let metadata_format = normalize_export_format(input.metadata_format.as_deref())?;
+    let mut anchor_meta = {
+        let anchors = list_anchors_inner(&input.project_id, state)?;
+        if let Some(summary) = anchors.first() {
+            let anchor = get_anchor_inner(&input.project_id, &summary.slug, state)?;
+            anchor_meta_from_character(&anchor)
+        } else {
+            default_anchor_meta(input.frame_width, input.frame_height)
+        }
+    };
+    anchor_meta.pivot.x =
+        input.pivot_x.clamp(0.0, 1.0) * (input.frame_width * input.scale) as f64;
+    anchor_meta.pivot.y =
+        input.pivot_y.clamp(0.0, 1.0) * (input.frame_height * input.scale) as f64;
     let mut canvas = RgbaImage::from_pixel(base_width, base_height, background);
-    let mut item_metadata = Vec::with_capacity(frames.len());
+    let mut prepared_frames = Vec::with_capacity(frames.len());
 
     set_job_state(
         app,
@@ -155,24 +177,27 @@ pub(super) fn render_sprite_sheet(
             image.width(),
             image.height(),
         );
-        canvas.copy_from(&image, cell_x + offset_x, cell_y + offset_y)?;
+        let trim_x = offset_x as i32 + frame.offset_x;
+        let trim_y = offset_y as i32 + frame.offset_y;
+        let draw_x = cell_x as i32 + trim_x;
+        let draw_y = cell_y as i32 + trim_y;
+        blit_with_offset(&mut canvas, &image, draw_x, draw_y);
         let duration = frame
             .duration_ms
             .unwrap_or_else(|| (1000.0 / fps.max(1.0)).round() as u32)
             .max(1);
-        item_metadata.push(serde_json::json!({
-            "index": index,
-            "assetId": asset.id,
-            "source": asset.relative_path,
-            "row": row,
-            "column": column,
-            "x": cell_x * input.scale,
-            "y": cell_y * input.scale,
-            "width": input.frame_width * input.scale,
-            "height": input.frame_height * input.scale,
-            "durationMs": duration,
-            "pivot": { "x": input.pivot_x, "y": input.pivot_y }
-        }));
+        prepared_frames.push(PreparedFrame {
+            frame: frame.clone(),
+            asset_id: asset.id.clone(),
+            relative_path: asset.relative_path.clone(),
+            source_width: image.width() * input.scale,
+            source_height: image.height() * input.scale,
+            sheet_x: cell_x * input.scale,
+            sheet_y: cell_y * input.scale,
+            draw_x: trim_x * input.scale as i32,
+            draw_y: trim_y * input.scale as i32,
+            duration_ms: duration,
+        });
         let progress = 0.08 + 0.72 * ((index + 1) as f64 / frames.len() as f64);
         set_job_state(
             app,
@@ -217,35 +242,47 @@ pub(super) fn render_sprite_sheet(
     std::fs::create_dir_all(&output_directory)?;
     let slug = portable_slug(input.name.trim());
     let revision = &sheet_id[..8];
+    let extension = metadata_extension(metadata_format);
     let png_path = output_directory.join(format!("{slug}-{revision}.png"));
-    let metadata_path = output_directory.join(format!("{slug}-{revision}.json"));
+    let metadata_path = output_directory.join(format!("{slug}-{revision}.{extension}"));
     output.save(&png_path)?;
 
-    let metadata = serde_json::json!({
-        "name": input.name.trim(),
-        "sourceAnimation": { "id": input.animation_id, "name": animation_name },
-        "image": png_path.file_name().and_then(|value| value.to_str()).unwrap_or("sprite-sheet.png"),
-        "layout": input.layout,
-        "frameWidth": input.frame_width * input.scale,
-        "frameHeight": input.frame_height * input.scale,
-        "frameCount": frame_count,
-        "rows": rows,
-        "columns": columns,
-        "padding": input.padding * input.scale,
-        "spacing": input.spacing * input.scale,
-        "scale": input.scale,
-        "transparent": input.transparent,
-        "alignment": input.alignment,
-        "pivot": { "x": input.pivot_x, "y": input.pivot_y },
-        "fps": fps,
-        "loop": looping,
-        "frames": item_metadata
-    });
-    std::fs::write(
-        &metadata_path,
-        serde_json::to_vec_pretty(&metadata)
-            .map_err(|error| CommandError::new("serialization_error", error.to_string()))?,
+    let image_file_name = png_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("sprite-sheet.png");
+    let prepared = PreparedStripExport {
+        frame_width: input.frame_width * input.scale,
+        frame_height: input.frame_height * input.scale,
+        sheet_width: output_width,
+        sheet_height: output_height,
+        frames: prepared_frames,
+    };
+    let grid_meta = SpriteSheetGridMeta {
+        layout: input.layout.clone(),
+        padding: input.padding * input.scale,
+        spacing: input.spacing * input.scale,
+        rows,
+        columns,
+        scale: input.scale,
+        transparent: input.transparent,
+        alignment: input.alignment.clone(),
+        source_animation_id: input.animation_id.clone(),
+        source_animation_name: animation_name.clone(),
+    };
+    let godot_texture_path = godot_texture_path_for_workspace(&png_path, &root);
+    let (metadata_body, _) = build_metadata_payload(
+        metadata_format,
+        input.name.trim(),
+        image_file_name,
+        &godot_texture_path,
+        fps,
+        looping,
+        &anchor_meta,
+        &prepared,
+        Some(&grid_meta),
     )?;
+    write_metadata_file(&metadata_path, &metadata_body)?;
 
     let now = Utc::now().to_rfc3339();
     let sheet = SpriteSheet {

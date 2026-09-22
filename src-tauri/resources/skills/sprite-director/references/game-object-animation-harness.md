@@ -2,7 +2,7 @@
 
 Use this harness for animated props, environmental objects, machinery, pickups, weapons, doors, chests, vehicles, plants, and other non-character game objects.
 
-ImageGen or the deterministic sprite renderer may create one transparent master. Rough animation frames must then come from `.sprite-studio/sprite_rig.py`; never generate a pose sheet or invent unrigged poses. Explicit AI Polish/Full redraw may edit completed rough frames only under the frame-polish contract.
+ImageGen or the deterministic sprite renderer may create one transparent master. Rough animation frames must then come from MCP **`save_rig`** + **`render_rig_animation`**; never generate a pose sheet or invent unrigged poses. Explicit AI Polish/Full redraw may edit completed rough frames only under the frame-polish contract.
 
 ## Category is semantic, not inherited
 
@@ -32,12 +32,7 @@ Before decomposition, require a movement description. If none is present, ask ho
 
 Apply the real-world physical envelope before timing the rig. Estimate scale, material/mass class, travel speed or angular velocity, acceleration, impact, damping, and cycle duration. Convert meters and seconds through the observed subject scale; explicit user values or clearly magical/cartoon motion override these estimates.
 
-Write new articulated work as a backward-compatible `rigVersion: 2` rig under `.sprite-studio/rigs/<slug>.json`. Use semantic roles, named source-space anchors, parent/attachment relationships, exclusive pixel ownership, `baseZ`, and per-frame `zOverrides` where the object's occlusion changes. Default to `rootMotion: "in-place"`; use `"baked"` only for explicitly requested displacement. Then run:
-
-```bash
-python3 .sprite-studio/sprite_rig.py --validate .sprite-studio/rigs/<slug>.json
-python3 .sprite-studio/sprite_rig.py .sprite-studio/rigs/<slug>.json
-```
+Write new articulated work as a backward-compatible `rigVersion: 2` rig under `.sprite-studio/rigs/<slug>.json`. Use semantic roles, named source-space anchors, parent/attachment relationships, exclusive pixel ownership, `baseZ`, and per-frame `zOverrides` where the object's occlusion changes. Default to `rootMotion: "in-place"`; use `"baked"` only for explicitly requested displacement. Then validate with MCP **`analyze_rig_fit`**, persist with **`save_rig`**, and render with **`render_rig_animation`**.
 
 Use the same JSON shape documented by the deterministic character rig harness. The renderer supports characters, terrain, props, and effects categories.
 

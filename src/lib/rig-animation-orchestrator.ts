@@ -207,6 +207,36 @@ export function resolveAnimateMasterAsset(
   return undefined;
 }
 
+/** Resolve the animate master after a master-only provider pass. */
+export function resolveMasterAfterProviderMasterPhase(input: {
+  manifest: GenerationManifest | null;
+  freshManifest: boolean;
+  manifestChanged: boolean;
+  scanned: Asset[];
+  library: Asset[];
+  responsePaths: string[];
+}): Asset | undefined {
+  let master = (input.freshManifest || input.manifestChanged) && input.manifest
+    ? resolveMasterFromManifest(input.manifest, input.scanned)
+    : undefined;
+  if (!master && input.responsePaths.length) {
+    master = input.responsePaths
+      .map(path => findAssetByManifestPath(input.library, path))
+      .find((asset): asset is Asset => Boolean(asset));
+  }
+  if (!master && input.scanned.length) {
+    master = resolveLatestCharacterAsset(input.scanned);
+  }
+  const hasGenerationSignal = input.freshManifest
+    || input.manifestChanged
+    || input.scanned.length > 0
+    || input.responsePaths.length > 0;
+  if (!master && hasGenerationSignal) {
+    master = resolveLatestCharacterAsset(input.library);
+  }
+  return master;
+}
+
 /** Pick the master asset from a fresh generation manifest. */
 export function resolveMasterFromManifest(manifest: GenerationManifest | null, assets: Asset[]): Asset | undefined {
   if (!manifest) return undefined;

@@ -16,12 +16,16 @@ export function findAssetByManifestPath(assets: Asset[], path: string): Asset | 
 }
 
 const ASSET_OUTPUT_PATH = /(?:^|[\s([{"'`]|])(assets[/\\][A-Za-z0-9_.\\/-]+\.(?:png|gif|webp))/gi;
-const MARKDOWN_ASSET_LINK = /\]\((assets[/\\][^)\s]+\.(?:png|gif|webp))\)/gi;
+const IMAGEGEN_OUTPUT_PATH = /(?:^|[\s([{"'`]|])(\.sprite-studio[/\\]imagegen-sources[/\\][A-Za-z0-9_.\\/-]+\.(?:png|gif|webp))/gi;
+const MARKDOWN_ASSET_LINK = /\]\(((?:assets|\.sprite-studio)[/\\][^)\s]+\.(?:png|gif|webp))\)/gi;
 
 /** Workspace-relative asset paths referenced in a completed provider response. */
 export function extractAssetPathsFromResponse(response: string): string[] {
   const paths = new Set<string>();
   for (const match of response.matchAll(ASSET_OUTPUT_PATH)) {
+    paths.add(normalizeManifestPath(match[1]));
+  }
+  for (const match of response.matchAll(IMAGEGEN_OUTPUT_PATH)) {
     paths.add(normalizeManifestPath(match[1]));
   }
   for (const match of response.matchAll(MARKDOWN_ASSET_LINK)) {

@@ -108,6 +108,8 @@ fn repair_alignment_inner(
         repaired_frames.push(AnimationFrame {
             asset_id: asset.id,
             duration_ms: source_frame.duration_ms,
+            offset_x: 0,
+            offset_y: 0,
         });
     }
     let now = Utc::now().to_rfc3339();
@@ -120,6 +122,7 @@ fn repair_alignment_inner(
         looping,
         frames: repaired_frames,
         motion_plan: None,
+        review_status: "draft".to_string(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -132,8 +135,8 @@ fn repair_alignment_inner(
             .map_err(|_| CommandError::new("database_locked", "Database lock was poisoned"))?;
         let transaction = connection.transaction()?;
         transaction.execute(
-            r#"INSERT INTO animations(id,workspace_id,worktree_id,name,fps,looping,frames_json,created_at,updated_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)"#,
+            r#"INSERT INTO animations(id,workspace_id,worktree_id,name,fps,looping,frames_json,review_status,created_at,updated_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,'draft',?8,?8)"#,
             params![repaired.id,repaired.workspace_id,repaired.worktree_id,repaired.name,repaired.fps,repaired.looping,repaired_json,repaired.created_at],
         )?;
         transaction.execute(
@@ -161,7 +164,7 @@ fn repair_alignment_inner(
     Ok(repaired)
 }
 
-pub(super) fn align_frame_to_canvas(
+pub(crate) fn align_frame_to_canvas(
     image: &RgbaImage,
     bounds: Option<(u32, u32, u32, u32)>,
     canvas_width: u32,

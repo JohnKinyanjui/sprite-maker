@@ -75,3 +75,60 @@ fn restoring_an_archived_chat_makes_it_active_again() {
     assert!(restored.archived_at.is_none());
     assert!(restore_conversation_record(&connection, "chat-1", "later").is_err());
 }
+
+#[test]
+fn deleting_a_chat_removes_it_and_its_messages() {
+    let connection = Connection::open_in_memory().expect("test database should open");
+    connection.execute_batch(
+            r#"
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE conversations (
+              id TEXT PRIMARY KEY
+            );
+            CREATE TABLE messages (
+              id TEXT PRIMARY KEY,
+              conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+              content TEXT NOT NULL
+            );
+            CREATE TABLE conversation_log_entries (
+              id TEXT PRIMARY KEY,
+              conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+              request_id TEXT,
+              level TEXT NOT NULL DEFAULT 'info',
+              category TEXT NOT NULL,
+              event_type TEXT NOT NULL,
+              message TEXT NOT NULL,
+              details_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL
+            );
+            INSERT INTO conversations(id) VALUES ('chat-1');
+            INSERT INTO messages(id, conversation_id, content) VALUES ('message-1', 'chat-1', 'Gone');
+            INSERT INTO conversation_log_entries(id, conversation_id, category, event_type, message, created_at)
+              VALUES ('log-1', 'chat-1', 'chat', 'user_message', 'hello', 'now');
+            "#,
+        ).expect("test records should insert");
+
+    connection
+        .execute(
+            "DELETE FROM conversation_log_entries WHERE conversation_id = ?1",
+            ["chat-1"],
+        )
+        .expect("log entries should delete");
+    connection
+        .execute("DELETE FROM conversations WHERE id = ?1", ["chat-1"])
+        .expect("chat should delete");
+
+    let conversations: i64 = connection
+        .query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))
+        .expect("conversation count should query");
+    let messages: i64 = connection
+        .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+        .expect("message count should query");
+    let log_entries: i64 = connection
+        .query_row("SELECT COUNT(*) FROM conversation_log_entries", [], |row| row.get(0))
+        .expect("log count should query");
+
+    assert_eq!(conversations, 0);
+    assert_eq!(messages, 0);
+    assert_eq!(log_entries, 0);
+}

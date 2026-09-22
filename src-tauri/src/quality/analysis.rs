@@ -10,6 +10,9 @@ use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
 use uuid::Uuid;
 
+use super::contract_bridge::{
+    apply_contract_penalties, contract_violations_to_pending_checks,
+};
 use super::frame_checks::collect_visual_checks;
 use super::metrics::{
     cache_metrics, centroid_distance, compute_metrics, content_hash, load_cached_metrics,
@@ -110,8 +113,8 @@ pub(super) fn run_analysis(
         },
     )?;
     let (mut checks, visual) = collect_visual_checks(app, state, job_id, &analyzed)?;
-    let alignment_penalty = visual.alignment;
-    let continuity_penalty = visual.continuity;
+    let mut alignment_penalty = visual.alignment;
+    let mut continuity_penalty = visual.continuity;
     let mut consistency_penalty = visual.consistency;
     let weapon_penalty = visual.weapon;
     let transparency_penalty = visual.transparency;
@@ -123,6 +126,19 @@ pub(super) fn run_analysis(
     for check in leg_alternation_checks(&analyzed) {
         consistency_penalty += if check.severity == "error" { 20.0 } else { 8.0 };
         checks.push(check);
+    }
+    if let Ok(contract_report) =
+        crate::pipeline::size_contract_check_inner(state, animation_id, None)
+    {
+        if !contract_report.violations.is_empty() {
+            apply_contract_penalties(
+                &contract_report.violations,
+                &mut alignment_penalty,
+                &mut consistency_penalty,
+                &mut continuity_penalty,
+            );
+            checks.extend(contract_violations_to_pending_checks(&contract_report.violations));
+        }
     }
     let loop_quality_score = if looping && analyzed.len() > 1 {
         let difference = pixel_difference(&analyzed[analyzed.len() - 1].image, &analyzed[0].image);

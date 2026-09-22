@@ -1,19 +1,24 @@
 mod inspect;
 mod pixel_normalize;
+mod removal;
 mod scan;
 
 #[cfg(test)]
 use inspect::safe_category;
 pub use inspect::{
-    __cmd__delete_asset, __cmd__import_asset, __cmd__list_asset_versions, __cmd__list_assets,
-    __cmd__rename_asset, __tauri_command_name_delete_asset, __tauri_command_name_import_asset,
+    __cmd__import_asset, __cmd__list_asset_versions, __cmd__list_assets,
+    __cmd__rename_asset, __tauri_command_name_import_asset,
     __tauri_command_name_list_asset_versions, __tauri_command_name_list_assets,
-    __tauri_command_name_rename_asset, delete_asset, get_asset, import_asset, list_asset_versions,
+    __tauri_command_name_rename_asset, get_asset, import_asset, list_asset_versions,
     list_assets, rename_asset,
+};
+pub use removal::{
+    __cmd__delete_asset, __cmd__get_asset_usage, __tauri_command_name_delete_asset,
+    __tauri_command_name_get_asset_usage, delete_asset, get_asset_usage,
 };
 pub(crate) use inspect::{inspect, list_assets_inner, upsert};
 pub(crate) use pixel_normalize::{
-    extract_palette, normalize_sprite_alpha, normalize_sprite_file,
+    defringe, extract_palette, normalize_sprite_alpha, normalize_sprite_file, remove_orphan_pixels,
 };
 pub use scan::{
     __cmd__export_asset, __cmd__get_generation_fingerprint, __cmd__get_generation_manifest,
@@ -25,7 +30,8 @@ pub use scan::{
     scan_generation_assets,
 };
 pub(crate) use scan::{
-    export_asset_inner, read_generation_manifest, scan_generation_assets_inner,
+    export_asset_inner, read_generation_manifest, recover_manifest_from_imagegen_sources,
+    scan_generation_assets_inner, write_generation_manifest,
 };
 #[cfg(test)]
 use scan::{collect_workspace_rig_specs, generation_fingerprint};

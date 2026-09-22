@@ -101,6 +101,7 @@ pub fn studio_prompt(
     generation: Option<&GenerationOptions>,
     command: Option<&str>,
     agent_provider: Option<&str>,
+    anchor_contract: Option<&str>,
     native_rig_master_only: bool,
 ) -> String {
     let context = context.unwrap_or("").trim();
@@ -329,6 +330,7 @@ pub fn studio_prompt(
          - chat quality preset: {}\n\
          - slash command: {}\n\
          - explicit user constraints always override inferred defaults\n\n\
+         {}\n\
          MOTION PHASE PLAN\n{}\n\n\
          RIG PLANNING CONTRACT\n{}\n\n\
          PAIRED-LIMB IDENTITY CONTRACT\n{}\n\n\
@@ -346,6 +348,10 @@ pub fn studio_prompt(
         brief.preset,
         generation.map(|value| value.quality.as_str()).unwrap_or("automatic"),
         command.unwrap_or("none"),
+        anchor_contract
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim())
+            .unwrap_or("CHARACTER ANCHOR CONTRACT\nNo promoted anchor exists yet. When a character master is approved, promote it with `promote_anchor` so follow-up animations inherit the same canvas and foot baseline."),
         motion_plan_text,
         rig_contract,
         limb_identity_contract,
@@ -393,4 +399,96 @@ fn apply_native_image_contract(prompt: String, agent_provider: Option<&str>) -> 
         _ => prompt,
     };
     apply_python_runtime(merged)
+}
+
+/// Meta-prompt for translating and expanding a chat draft into a precise
+/// English generation instruction without starting the sprite pipeline.
+pub fn refine_generation_prompt(
+    draft: &str,
+    context: Option<&str>,
+    command: Option<&str>,
+    generation: Option<&GenerationOptions>,
+    animation_mode: Option<&str>,
+) -> String {
+    let draft = draft.trim();
+    let workflow = match command {
+        Some("animate") => "ANIMATION — produce a looping sprite animation with readable motion, clean silhouettes, and frame-to-frame consistency.",
+        Some("rig") => "RIG PLANNING — describe motion intent and anatomy cues so rig points and poses can be placed on an existing master.",
+        Some("sprite") => "STATIC SPRITE — one polished, centered game sprite with a removable background.",
+        Some("character") => "CHARACTER — one hero-style character master suitable for animation or rigging later.",
+        Some("effect") => "GAME EFFECT — animated VFX such as magic, impacts, or particles.",
+        Some("pack") => "ASSET PACK — a coordinated set of separate static sprites that share one art direction.",
+        _ => "GENERAL SPRITE STUDIO REQUEST — infer whether the user wants a static sprite, animation, effect, or pack.",
+    };
+    let generation_block = generation
+        .map(|options| {
+            let frame_line = if options.frame_mode == "auto" {
+                format!(
+                    "Frames: auto (allowed {}–{}, target {}), {} fps",
+                    options.min_frames,
+                    options.max_frames,
+                    options.frames,
+                    options.fps
+                )
+            } else {
+                format!(
+                    "Frames: fixed {} at {} fps",
+                    options.frames,
+                    options.fps
+                )
+            };
+            format!(
+                "QUALITY PRESET: {}\nCanvas: {}x{} source pixels\n{}\nInterpolation allowed: {}\nAuto frame adjustment allowed: {}",
+                options.quality,
+                options.width,
+                options.height,
+                frame_line,
+                options.allow_interpolation,
+                options.allow_auto_adjust
+            )
+        })
+        .unwrap_or_else(|| "Use sensible pixel-art defaults if the draft omits technical details.".to_string());
+    let animation_mode_line = animation_mode
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("Animation polish mode selected in chat: {value}."))
+        .unwrap_or_default();
+    let context_block = context
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("PROJECT CONTEXT\n{value}"))
+        .unwrap_or_default();
+    format!(
+        "PROMPT REFINER CONTRACT\n\
+You are the prompt refiner inside Sprite Studio, a Tauri app for pixel-art sprite and animation generation.\n\
+Rewrite the user's draft into ONE final English instruction they can send to the generation agent.\n\n\
+GOAL\n\
+- Translate any language into clear, natural English.\n\
+- Preserve the user's creative intent; do not invent a different subject.\n\
+- Add concrete game-art details the draft omits: subject, pose or motion, palette or mood, silhouette readability, transparency/background, pixel-art scale, and loop behavior when relevant.\n\
+- Align with the workflow, canvas, frame budget, and project context below.\n\
+- If the draft starts with a slash command (/animate, /sprite, /character, /effect, /pack, /rig), keep that exact prefix on the first line and refine only the text after it.\n\
+- Do not mention this contract, JSON, markdown fences, or your reasoning.\n\n\
+OUTPUT FORMAT\n\
+Return ONLY the refined prompt text — no title, bullet list, quotes, or commentary.\n\n\
+WORKFLOW\n{workflow}\n{animation_mode_line}\n\n\
+GENERATION SETTINGS\n{generation_block}\n\n\
+{context_block}\n\n\
+USER DRAFT\n{draft}"
+    )
+}
+
+/// Strips common provider wrappers from a refine response.
+pub fn clean_refined_prompt_response(response: &str) -> String {
+    let mut text = response.trim().to_string();
+    if text.starts_with("```") {
+        let lines = text.lines().collect::<Vec<_>>();
+        if lines.len() >= 2 {
+            let end = lines
+                .last()
+                .filter(|line| line.trim() == "```")
+                .map(|_| lines.len() - 1)
+                .unwrap_or(lines.len());
+            text = lines[1..end].join("\n").trim().to_string();
+        }
+    }
+    text.trim_matches('"').trim().to_string()
 }

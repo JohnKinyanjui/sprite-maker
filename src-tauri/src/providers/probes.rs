@@ -2,6 +2,7 @@ use super::discovery::{
     isolate_login_shell, login_shell_state, provider_process_path, stop_login_shell,
     LoginShellState,
 };
+use super::headless::apply_std_headless_flags;
 use std::{
     env,
     fs::{self, OpenOptions},
@@ -124,6 +125,7 @@ fn run_probe_once(
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
+        apply_std_headless_flags(&mut command);
         isolate_login_shell(&mut command);
         let mut child = match command.spawn() {
             Ok(child) => child,

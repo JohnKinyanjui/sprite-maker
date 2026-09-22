@@ -1,3 +1,4 @@
+use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 pub const MORPHOLOGIES: [&str; 6] = [
@@ -22,7 +23,7 @@ fn default_one() -> f64 {
     1.0
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RigPoint {
     pub id: String,
@@ -36,7 +37,7 @@ pub struct RigPoint {
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RigBone {
     pub id: String,
@@ -49,7 +50,7 @@ pub struct RigBone {
     pub z: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RigTransform {
     pub bone: String,
@@ -65,7 +66,7 @@ pub struct RigTransform {
     pub scale_y: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RigContact {
     pub bone: String,
@@ -75,7 +76,7 @@ pub struct RigContact {
     pub bend: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RigFrame {
     #[serde(default)]
@@ -121,7 +122,7 @@ pub struct Rig {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RigInput {
     pub id: Option<String>,

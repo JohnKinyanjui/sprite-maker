@@ -1,5 +1,7 @@
 mod alignment;
 mod analysis;
+mod contract_bridge;
+mod rig_bridge;
 mod frame_checks;
 mod interpolation;
 mod metrics;
@@ -25,6 +27,7 @@ pub use reports::{
     __tauri_command_name_queue_quality_analysis, acknowledge_quality_check, get_quality_report,
     queue_quality_analysis,
 };
+pub(crate) use metrics::{bounds_area, centroid_distance, compute_metrics, pixel_difference};
 pub(crate) use reports::{get_quality_report_inner, queue_quality_analysis_inner};
 
 #[cfg(test)]

@@ -48,11 +48,48 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
+      - name: Download bundled ffmpeg
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1
+          else
+            bash scripts/fetch-ffmpeg.sh
+          fi
+
+      - name: Import Windows code signing certificate
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
+            Write-Host "WINDOWS_CERTIFICATE is not set; Windows installers will be unsigned."
+            exit 0
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD must be set when WINDOWS_CERTIFICATE is configured."
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "sprite-studio-codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $securePassword = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword
+          $thumbprint = $cert.Thumbprint
+          $configPath = Join-Path $env:RUNNER_TEMP "tauri-windows-sign.json"
+          @{ bundle = @{ windows = @{ certificateThumbprint = $thumbprint } } } |
+            ConvertTo-Json -Compress -Depth 5 |
+            Set-Content -Path $configPath -Encoding utf8
+          "TAURI_ARGS=--config $configPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Remove-Item -Path $pfxPath -Force
+          Write-Host "Imported Windows code signing certificate."
+
       - name: Build and publish installers
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          args: ${{ env.TAURI_ARGS }}
           tagName: v__VERSION__
           releaseName: Sprite Studio v__VERSION__
           releaseBody: |

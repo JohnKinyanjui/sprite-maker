@@ -6,6 +6,8 @@ use std::path::Path;
 const KEY_THRESHOLD_SQ: f64 = 72.0 * 72.0;
 const VISIBLE_ALPHA: u8 = 64;
 const OPAQUE_ALPHA: u8 = 255;
+const BRIGHT_FRINGE_LUMINANCE: f64 = 190.0;
+const OPAQUE_BRIGHT_EDGE_LUMINANCE: f64 = 215.0;
 
 pub(crate) fn extract_palette(master: &RgbaImage, max_colors: usize) -> Vec<[u8; 3]> {
     let mut counts: HashMap<[u8; 3], u32> = HashMap::new();
@@ -100,27 +102,39 @@ fn touches_transparent(image: &RgbaImage, x: u32, y: u32) -> bool {
         .any(|(neighbor_x, neighbor_y)| image.get_pixel(*neighbor_x, *neighbor_y)[3] == 0)
 }
 
-pub(crate) fn defringe(image: &mut RgbaImage) {
+fn pixel_luminance(pixel: Rgba<u8>) -> f64 {
+    0.299 * pixel[0] as f64 + 0.587 * pixel[1] as f64 + 0.114 * pixel[2] as f64
+}
+
+fn is_edge_fringe_pixel(image: &RgbaImage, x: u32, y: u32, pixel: Rgba<u8>) -> bool {
+    if pixel[3] == 0 || !touches_transparent(image, x, y) {
+        return false;
+    }
+    let luminance = pixel_luminance(pixel);
+    pixel[3] < VISIBLE_ALPHA
+        || (luminance > BRIGHT_FRINGE_LUMINANCE && pixel[3] < OPAQUE_ALPHA)
+        || luminance > OPAQUE_BRIGHT_EDGE_LUMINANCE
+}
+
+fn defringe_pass(image: &mut RgbaImage) {
     let (width, height) = image.dimensions();
     let mut to_clear = Vec::new();
     for y in 0..height {
         for x in 0..width {
             let pixel = *image.get_pixel(x, y);
-            if pixel[3] == 0 {
-                continue;
-            }
-            let luminance = 0.299 * pixel[0] as f64
-                + 0.587 * pixel[1] as f64
-                + 0.114 * pixel[2] as f64;
-            let light_fringe = luminance > 200.0 && pixel[3] < OPAQUE_ALPHA;
-            let edge_residue = pixel[3] < VISIBLE_ALPHA && touches_transparent(image, x, y);
-            if (light_fringe || edge_residue) && touches_transparent(image, x, y) {
+            if is_edge_fringe_pixel(image, x, y, pixel) {
                 to_clear.push((x, y));
             }
         }
     }
     for (x, y) in to_clear {
         image.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+    }
+}
+
+pub(crate) fn defringe(image: &mut RgbaImage) {
+    for _ in 0..2 {
+        defringe_pass(image);
     }
 }
 
@@ -139,10 +153,8 @@ pub(crate) fn remove_orphan_pixels(image: &mut RgbaImage) {
             if has_neighbor {
                 continue;
             }
-            let luminance = 0.299 * pixel[0] as f64
-                + 0.587 * pixel[1] as f64
-                + 0.114 * pixel[2] as f64;
-            if luminance > 180.0 || pixel[3] < OPAQUE_ALPHA {
+            let luminance = pixel_luminance(pixel);
+            if luminance > 160.0 || pixel[3] < OPAQUE_ALPHA {
                 to_clear.push((x, y));
             }
         }
@@ -171,7 +183,19 @@ pub(crate) fn normalize_sprite_alpha(
             };
             if !visible {
                 output.put_pixel(x, y, Rgba([0, 0, 0, 0]));
-            } else if !palette.is_empty() {
+            }
+        }
+    }
+
+    defringe(&mut output);
+
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = *output.get_pixel(x, y);
+            if pixel[3] == 0 {
+                continue;
+            }
+            if !palette.is_empty() {
                 let mapped = nearest_palette([pixel[0], pixel[1], pixel[2]], palette);
                 output.put_pixel(x, y, Rgba([mapped[0], mapped[1], mapped[2], OPAQUE_ALPHA]));
             } else if has_native_alpha && pixel[3] < OPAQUE_ALPHA {
@@ -243,6 +267,21 @@ mod tests {
         let normalized = normalize_sprite_alpha(&image, None);
         assert_eq!(normalized.get_pixel(0, 0)[3], 0);
         assert_eq!(normalized.get_pixel(3, 2)[3], 0);
+        assert_eq!(normalized.get_pixel(2, 2)[3], 255);
+    }
+
+    #[test]
+    fn removes_opaque_white_dots_touching_transparency() {
+        let mut image = RgbaImage::new(5, 5);
+        for pixel in image.pixels_mut() {
+            *pixel = Rgba([0, 0, 0, 0]);
+        }
+        image.put_pixel(2, 2, Rgba([120, 30, 30, 255]));
+        image.put_pixel(3, 2, Rgba([255, 255, 255, 255]));
+        image.put_pixel(2, 3, Rgba([255, 255, 255, 255]));
+        let normalized = normalize_sprite_alpha(&image, None);
+        assert_eq!(normalized.get_pixel(3, 2)[3], 0);
+        assert_eq!(normalized.get_pixel(2, 3)[3], 0);
         assert_eq!(normalized.get_pixel(2, 2)[3], 255);
     }
 }

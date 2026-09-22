@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import type { ActiveChatRequest } from "../src/lib/chat-generation-finalize";
+import { generationRequestFromProfile } from "../src/lib/chat-generation-finalize";
 import { attachAiPolishHandoffMetadata, normalizeManifestPath, roughIndexForPolishedPath } from "../src/lib/chat-generation-run";
-import type { ActiveChatRequest, Asset } from "../src/lib/types";
+import { normalizeGenerationProfile } from "../src/lib/generation-profiles";
+import type { Asset } from "../src/lib/types";
 
 describe("chat generation run helpers", () => {
   test("normalizes manifest paths for comparison", () => {
@@ -29,16 +32,16 @@ describe("chat generation run helpers", () => {
       { id: "a1", relativePath: "assets/frame-00.png" } as Asset,
       { id: "a2", relativePath: "assets/frame-01.png" } as Asset,
     ];
-    const request = {
+    const request: ActiveChatRequest = {
       id: "req-1",
       conversationId: "chat-1",
       workspaceId: "ws-1",
       prompt: "polish",
       command: "animate",
-      generation: { fps: 12, width: 64, height: 64, quality: "mid" },
+      generation: generationRequestFromProfile(normalizeGenerationProfile(null)),
       knownPackIds: [],
       startedAt: Date.now(),
-    } as ActiveChatRequest;
+    };
     const enriched = attachAiPolishHandoffMetadata(request, {
       masterPath: "assets/hero.png",
       frameAssets,

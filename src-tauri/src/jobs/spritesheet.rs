@@ -1,6 +1,8 @@
 use crate::{
+    animations::export_metadata::normalize_export_format,
     error::{CommandError, CommandResult},
     models::{BackgroundJob, SpriteSheet, SpriteSheetInput},
+    pipeline::ensure_export_allowed,
     AppState,
 };
 use chrono::Utc;
@@ -89,6 +91,9 @@ pub(super) fn validate_input(input: &SpriteSheetInput) -> CommandResult<()> {
             "invalid_alignment",
             "Choose Top left, Center, or Bottom center alignment",
         ));
+    }
+    if let Some(format) = &input.metadata_format {
+        normalize_export_format(Some(format))?;
     }
     Ok(())
 }
@@ -231,6 +236,7 @@ pub(crate) fn queue_sprite_sheet_inner(
     state: &AppState,
 ) -> CommandResult<BackgroundJob> {
     validate_input(&input)?;
+    ensure_export_allowed(state, &input.animation_id)?;
     let animation_exists: bool = {
         let connection = state
             .db

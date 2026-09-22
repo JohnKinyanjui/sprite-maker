@@ -1,0 +1,26 @@
+# Normalize line endings: LF in the repository and in the working tree.
+* text=auto eol=lf
+
+# Windows launcher scripts require CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — do not alter line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.exe binary
+*.msi binary
+*.dmg binary
+*.AppImage binary
+*.deb binary
+*.rpm binary

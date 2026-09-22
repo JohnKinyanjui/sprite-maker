@@ -2,6 +2,25 @@ use super::schema::DEFAULT_PROVIDER;
 use crate::{
     animations::export_animation_inner,
     assets::{export_asset_inner, scan_generation_assets_inner},
+    pipeline::{
+        character_contract_check_inner, get_anchor_inner, list_anchors_inner,
+        clean_alpha_animation_inner, harden_animation_inner, normalize_animation_inner,
+        nudge_animation_frames_inner, promote_anchor_inner, snap_animation_offsets_inner,
+        set_animation_review_status_inner, size_contract_check_inner, orient_anchor_inner,
+        queue_contract_retry_inner, queue_direction_set_inner, extract_video_frames_inner,
+        finalize_contract_retry_inner, retry_size_contract_inner, score_strip_inner,
+        split_sprite_strip_inner, detect_anchor_facing_inner, mirror_animation_inner,
+        get_character_profile_inner,
+    },
+    pipeline::{
+        export_character_pack_inner, list_facing_checks_inner, ListFacingChecksInput,
+        production_score_inner, queue_motion_batch_inner, queue_region_regen_inner,
+        score_animation_frames_inner,
+    },
+    rig::{
+        analyze_rig_fit_inner, interpolate_rig_frames_inner, InterpolateRigFramesInput,
+        render_rig_animation_blocking, save_rig_inner, suggest_rig_points_inner,
+    },
     conversations::{create_conversation_inner, get_conversation, get_message},
     error::{CommandError, CommandResult},
     models::{GenerationOptions, ProviderRequestOptions, TerrainExportInput},
@@ -387,7 +406,7 @@ pub(crate) fn list_artifacts(
     state: &AppState,
     workspace_id: &str,
 ) -> CommandResult<Vec<serde_json::Value>> {
-    let assets = scan_generation_assets_inner(workspace_id, None, state)?;
+    let assets = scan_generation_assets_inner(workspace_id, None, None, state)?;
     Ok(assets
         .into_iter()
         .map(|asset| {
@@ -413,7 +432,12 @@ pub(crate) fn export_item(
             Ok(serde_json::to_value(result).unwrap_or(Value::Null))
         }
         "animation" => {
-            let result = export_animation_inner(&params.id, params.destination, state)?;
+            let result = export_animation_inner(
+                &params.id,
+                params.destination,
+                params.export_format.as_deref(),
+                state,
+            )?;
             Ok(serde_json::to_value(result).unwrap_or(Value::Null))
         }
         "godot_tileset" => {
@@ -447,6 +471,335 @@ pub(crate) fn export_item(
     }
 }
 
+pub(crate) fn promote_anchor(
+    state: &AppState,
+    params: super::schema::PromoteAnchorParams,
+) -> CommandResult<serde_json::Value> {
+    let anchor = promote_anchor_inner(
+        &params.workspace_id,
+        &params.asset_id,
+        params.slug.as_deref(),
+        params.auto_orient.unwrap_or(false),
+        params.view.as_deref(),
+        state,
+    )?;
+    Ok(serde_json::to_value(anchor).unwrap_or(Value::Null))
+}
+
+pub(crate) fn check_anchor_facing(
+    state: &AppState,
+    params: super::schema::AnchorSlugParams,
+) -> CommandResult<serde_json::Value> {
+    let report = detect_anchor_facing_inner(&params.workspace_id, &params.slug, state)?;
+    Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+pub(crate) fn orient_anchor(
+    state: &AppState,
+    params: super::schema::AnchorSlugParams,
+) -> CommandResult<serde_json::Value> {
+    let anchor = orient_anchor_inner(&params.workspace_id, &params.slug, state)?;
+    Ok(serde_json::to_value(anchor).unwrap_or(Value::Null))
+}
+
+pub(crate) fn mirror_animation(
+    state: &AppState,
+    params: super::schema::MirrorAnimationParams,
+) -> CommandResult<serde_json::Value> {
+    let result = mirror_animation_inner(
+        None,
+        state,
+        crate::models::MirrorAnimationInput {
+            animation_id: params.animation_id,
+            target_facing: params.target_facing,
+            source_facing: params.source_facing,
+            anchor_slug: params.anchor_slug,
+            rig_id: params.rig_id,
+        },
+    )?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn queue_direction_set(
+    state: &AppState,
+    params: super::schema::QueueDirectionSetParams,
+) -> CommandResult<serde_json::Value> {
+    let result = queue_direction_set_inner(
+        crate::models::QueueDirectionSetInput {
+            workspace_id: params.workspace_id,
+            worktree_id: params.worktree_id,
+            source_animation_id: params.source_animation_id,
+            anchor_slug: params.anchor_slug,
+            motion: params.motion,
+            set: params.set,
+            conversation_id: params.conversation_id,
+        },
+        None,
+        state,
+    )?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn clean_alpha(
+    state: &AppState,
+    params: super::schema::CleanAlphaParams,
+) -> CommandResult<serde_json::Value> {
+    let report = clean_alpha_animation_inner(state, &params.animation_id)?;
+    Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+pub(crate) fn snap_to_pixel_grid(
+    state: &AppState,
+    params: super::schema::SnapToPixelGridParams,
+) -> CommandResult<serde_json::Value> {
+    let animation = snap_animation_offsets_inner(
+        state,
+        &params.animation_id,
+        params.grid_size.unwrap_or(1),
+    )?;
+    Ok(serde_json::to_value(animation).unwrap_or(Value::Null))
+}
+
+pub(crate) fn harden_animation(
+    state: &AppState,
+    params: super::schema::HardenAnimationParams,
+) -> CommandResult<serde_json::Value> {
+    let report = harden_animation_inner(
+        None,
+        state,
+        &params.animation_id,
+        params.anchor_slug.as_deref(),
+        params.source_path.as_deref(),
+        params.frame_count,
+        params.conversation_id.as_deref(),
+        params.options.unwrap_or_default(),
+    )?;
+    Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+pub(crate) fn normalize_animation(
+    state: &AppState,
+    params: super::schema::NormalizeAnimationParams,
+) -> CommandResult<serde_json::Value> {
+    let animation = normalize_animation_inner(
+        None,
+        state,
+        crate::models::NormalizeAnimationInput {
+            animation_id: params.animation_id,
+            anchor_slug: params.anchor_slug,
+            lock_first_frame: params.lock_first_frame,
+            shared_scale: params.shared_scale,
+            padding: params.padding,
+        },
+    )?;
+    Ok(serde_json::to_value(animation).unwrap_or(Value::Null))
+}
+
+pub(crate) fn score_strip(
+    _state: &AppState,
+    params: super::schema::ScoreStripParams,
+) -> CommandResult<serde_json::Value> {
+    let result = score_strip_inner(
+        &params.source_path,
+        params.frame_count,
+        params.layout.as_deref(),
+    )?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn split_strip(
+    state: &AppState,
+    params: super::schema::SplitStripParams,
+) -> CommandResult<serde_json::Value> {
+    let result = split_sprite_strip_inner(
+        &params.workspace_id,
+        &params.source_path,
+        &params.layout,
+        params.frame_count,
+        params.columns,
+        params.recover_foreground.unwrap_or(true),
+        params.category.as_deref().unwrap_or("characters"),
+        state,
+    )?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn extract_video_frames(
+    state: &AppState,
+    params: super::schema::ExtractVideoFramesParams,
+) -> CommandResult<serde_json::Value> {
+    let result = extract_video_frames_inner(
+        state,
+        &params.workspace_id,
+        &params.video_path,
+        params.fps,
+    )?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn align_frames(
+    state: &AppState,
+    params: super::schema::AlignFramesParams,
+) -> CommandResult<serde_json::Value> {
+    let animation = nudge_animation_frames_inner(
+        state,
+        crate::models::NudgeAnimationFramesInput {
+            animation_id: params.animation_id,
+            deltas: params.deltas,
+            apply_to_all: params.apply_to_all,
+        },
+    )?;
+    Ok(serde_json::to_value(animation).unwrap_or(Value::Null))
+}
+
+pub(crate) fn check_size_contract(
+    state: &AppState,
+    params: super::schema::SizeContractParams,
+) -> CommandResult<serde_json::Value> {
+    let report = size_contract_check_inner(
+        state,
+        &params.animation_id,
+        params.anchor_slug.as_deref(),
+    )?;
+    Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+pub(crate) fn check_character_contract(
+    state: &AppState,
+    params: super::schema::CharacterContractParams,
+) -> CommandResult<serde_json::Value> {
+    let report = character_contract_check_inner(
+        state,
+        &params.workspace_id,
+        &params.worktree_id,
+        params.anchor_slug.as_deref(),
+    )?;
+    Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+pub(crate) fn list_promoted_anchors(
+    state: &AppState,
+    workspace_id: &str,
+) -> CommandResult<serde_json::Value> {
+    let anchors = list_anchors_inner(workspace_id, state)?;
+    Ok(serde_json::to_value(anchors).unwrap_or(Value::Null))
+}
+
+pub(crate) fn set_animation_review(
+    state: &AppState,
+    params: super::schema::SetReviewStatusParams,
+) -> CommandResult<serde_json::Value> {
+    let animation = set_animation_review_status_inner(
+        state,
+        &params.animation_id,
+        &params.status,
+    )?;
+    Ok(serde_json::to_value(animation).unwrap_or(Value::Null))
+}
+
+pub(crate) fn save_rig(
+    state: &AppState,
+    input: crate::rig::RigInput,
+) -> CommandResult<serde_json::Value> {
+    let rig = save_rig_inner(input, state)?;
+    Ok(serde_json::to_value(rig).unwrap_or(Value::Null))
+}
+
+pub(crate) fn render_rig_animation(
+    state: &AppState,
+    input: crate::rig::RigInput,
+) -> CommandResult<serde_json::Value> {
+    let result = render_rig_animation_blocking(input, state)?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn suggest_rig_points(
+    state: &AppState,
+    params: super::schema::SuggestRigParams,
+) -> CommandResult<serde_json::Value> {
+    let suggestion = suggest_rig_points_inner(
+        state,
+        &params.asset_id,
+        params.morphology.as_deref(),
+    )?;
+    Ok(serde_json::to_value(suggestion).unwrap_or(Value::Null))
+}
+
+pub(crate) fn analyze_rig_fit(
+    state: &AppState,
+    params: super::schema::AssetIdParams,
+) -> CommandResult<serde_json::Value> {
+    let report = analyze_rig_fit_inner(state, &params.asset_id)?;
+    Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+pub(crate) fn get_character_profile(
+    state: &AppState,
+    params: super::schema::AnchorSlugParams,
+) -> CommandResult<serde_json::Value> {
+    let profile = get_character_profile_inner(&params.workspace_id, &params.slug, state)?;
+    Ok(serde_json::to_value(profile).unwrap_or(Value::Null))
+}
+
+pub(crate) fn retry_size_contract(
+    state: &AppState,
+    params: super::schema::RetrySizeContractParams,
+) -> CommandResult<serde_json::Value> {
+    let result = retry_size_contract_inner(
+        state,
+        &params.animation_id,
+        params.anchor_slug.as_deref(),
+        params.conversation_id.as_deref(),
+        params.regenerate.unwrap_or(false),
+        params.max_deterministic_passes,
+        None,
+    )?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn queue_contract_retry(
+    state: &AppState,
+    params: super::schema::QueueContractRetryParams,
+) -> CommandResult<serde_json::Value> {
+    let result = queue_contract_retry_inner(
+        crate::models::QueueContractRetryInput {
+            animation_id: params.animation_id,
+            conversation_id: params.conversation_id,
+            anchor_slug: params.anchor_slug,
+            max_ai_attempts: params.max_ai_attempts,
+            max_deterministic_passes: params.max_deterministic_passes,
+        },
+        None,
+        state,
+    )?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn finalize_contract_retry(
+    state: &AppState,
+    params: super::schema::FinalizeContractRetryParams,
+) -> CommandResult<serde_json::Value> {
+    let result = finalize_contract_retry_inner(
+        state,
+        &params.animation_id,
+        &params.source_path,
+        params.frame_count,
+        params.anchor_slug.as_deref(),
+        params.layout.as_deref(),
+        None,
+    )?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn get_promoted_anchor(
+    state: &AppState,
+    workspace_id: &str,
+    slug: &str,
+) -> CommandResult<serde_json::Value> {
+    let anchor = get_anchor_inner(workspace_id, slug, state)?;
+    Ok(serde_json::to_value(anchor).unwrap_or(Value::Null))
+}
+
 pub(crate) fn quality_report(
     state: &AppState,
     params: super::schema::QualityParams,
@@ -461,6 +814,80 @@ pub(crate) fn quality_report(
         return Ok(serde_json::json!({ "jobId": job.id, "status": job.status }));
     }
     Ok(serde_json::to_value(existing).unwrap_or(Value::Null))
+}
+
+pub(crate) fn queue_motion_batch(
+    state: &AppState,
+    input: crate::models::QueueMotionBatchInput,
+) -> CommandResult<serde_json::Value> {
+    let result = queue_motion_batch_inner(input, None, state)?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn queue_region_regen(
+    state: &AppState,
+    input: crate::models::QueueRegionRegenInput,
+) -> CommandResult<serde_json::Value> {
+    let result = queue_region_regen_inner(input, None, state)?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn export_character_pack(
+    state: &AppState,
+    input: crate::models::ExportCharacterPackInput,
+) -> CommandResult<serde_json::Value> {
+    if input.destination.trim().is_empty() {
+        return Err(CommandError::new(
+            "destination_required",
+            "destination is required for headless character pack export",
+        ));
+    }
+    let result = export_character_pack_inner(state, &input)?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn get_production_score(
+    state: &AppState,
+    params: super::schema::ProductionScoreParams,
+) -> CommandResult<serde_json::Value> {
+    if params.worktree_id.trim().is_empty() {
+        return Err(CommandError::new(
+            "missing_worktree",
+            "worktreeId is required for production score",
+        ));
+    }
+    let report = production_score_inner(
+        state,
+        &params.workspace_id,
+        &params.worktree_id,
+        params.anchor_slug.as_deref(),
+    )?;
+    Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+pub(crate) fn interpolate_rig_frames(
+    state: &AppState,
+    input: InterpolateRigFramesInput,
+) -> CommandResult<serde_json::Value> {
+    let result = interpolate_rig_frames_inner(input, state)?;
+    Ok(serde_json::to_value(result).unwrap_or(Value::Null))
+}
+
+pub(crate) fn score_animation_frames(
+    state: &AppState,
+    params: super::schema::ScoreAnimationFramesParams,
+) -> CommandResult<serde_json::Value> {
+    let report = score_animation_frames_inner(&params.animation_id, state)?;
+    Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+pub(crate) fn list_facing_checks(
+    state: &AppState,
+    input: ListFacingChecksInput,
+) -> CommandResult<serde_json::Value> {
+    let reports =
+        list_facing_checks_inner(&input.workspace_id, input.slug.as_deref(), state)?;
+    Ok(serde_json::to_value(reports).unwrap_or(Value::Null))
 }
 
 #[cfg(test)]

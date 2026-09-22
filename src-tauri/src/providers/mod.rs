@@ -12,6 +12,7 @@ mod image_providers;
 mod modes;
 mod probes;
 mod prompt;
+mod refine;
 mod run;
 mod stream;
 
@@ -29,13 +30,21 @@ pub use image_providers::{
     __tauri_command_name_test_image_provider, delete_image_provider, save_image_provider,
     test_image_provider,
 };
+pub use refine::{
+    __cmd__cancel_refine_generation_prompt_command, __cmd__refine_generation_prompt_command,
+    __tauri_command_name_cancel_refine_generation_prompt_command,
+    __tauri_command_name_refine_generation_prompt_command,
+    cancel_refine_generation_prompt_command, refine_generation_prompt_command,
+};
 pub use run::{
     __cmd__cancel_provider_request, __cmd__start_provider_message,
     __tauri_command_name_cancel_provider_request, __tauri_command_name_start_provider_message,
     cancel_provider_request, start_provider_message,
 };
 
+pub(crate) use refine::RefineCancelEntry;
 pub(crate) use detect::detect_providers_inner;
+pub(crate) use headless::{apply_std_headless_flags, apply_tokio_headless_flags};
 pub(crate) use prompt::run_agent_text_request;
 pub(crate) use run::{cancel_provider_request_inner, start_provider_run};
 
@@ -47,8 +56,6 @@ use arguments::{
 use auth::{antigravity_cli_install_command, cursor_cli_install_command};
 #[cfg(test)]
 use discovery::{executable_lookup_names, merge_provider_paths, provider_process_path};
-#[cfg(test)]
-use headless::apply_std_headless_flags;
 #[cfg(test)]
 use image_providers::is_provider_native_image;
 #[cfg(test)]

@@ -16,6 +16,7 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
+    sync::oneshot,
 };
 use uuid::Uuid;
 
@@ -50,6 +51,7 @@ pub(crate) async fn run_agent_text_request(
     cwd: &Path,
     prompt: &str,
     image_paths: &[String],
+    cancel_rx: Option<oneshot::Receiver<()>>,
 ) -> CommandResult<String> {
     if !matches!(
         provider_id,
@@ -140,11 +142,51 @@ pub(crate) async fn run_agent_text_request(
     });
     let mut response = String::new();
     let mut read_failed: Option<String> = None;
+    let mut cancelled = false;
     if let Some(stdout) = child.stdout.take() {
         let mut lines = BufReader::new(stdout).lines();
-        let collect = async {
-            loop {
-                match lines.next_line().await {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+        let mut cancel_rx = cancel_rx;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                let _ = child.kill().await;
+                if let Some(path) = prompt_file.as_ref() {
+                    let _ = fs::remove_file(path);
+                }
+                return Err(CommandError::new(
+                    "provider_timeout",
+                    format!(
+                        "{} did not answer within five minutes. Try again or use Auto-suggest.",
+                        provider_display_name(provider_id)
+                    ),
+                ));
+            }
+            let next_line = lines.next_line();
+            match cancel_rx.as_mut() {
+                Some(receiver) => {
+                    tokio::select! {
+                        _ = receiver => {
+                            cancelled = true;
+                            let _ = child.kill().await;
+                            break;
+                        }
+                        result = next_line => match result {
+                            Ok(Some(line)) => {
+                                let (text, _, _) =
+                                    parse_stream_line(provider_id, &line, !response.is_empty());
+                                if let Some(text) = text {
+                                    append_stream_text(&mut response, provider_id, &text);
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(error) => {
+                                read_failed = Some(error.to_string());
+                                break;
+                            }
+                        },
+                    }
+                }
+                None => match next_line.await {
                     Ok(Some(line)) => {
                         let (text, _, _) =
                             parse_stream_line(provider_id, &line, !response.is_empty());
@@ -157,27 +199,18 @@ pub(crate) async fn run_agent_text_request(
                         read_failed = Some(error.to_string());
                         break;
                     }
-                }
+                },
             }
-        };
-        // A structured ask should answer in one pass; a silent or stuck CLI
-        // must not hold the caller's UI forever.
-        if tokio::time::timeout(Duration::from_secs(300), collect)
-            .await
-            .is_err()
-        {
-            let _ = child.kill().await;
-            if let Some(path) = prompt_file.as_ref() {
-                let _ = fs::remove_file(path);
-            }
-            return Err(CommandError::new(
-                "provider_timeout",
-                format!(
-                    "{} did not answer within five minutes. Try again or use Auto-suggest.",
-                    provider_display_name(provider_id)
-                ),
-            ));
         }
+    }
+    if cancelled {
+        if let Some(path) = prompt_file.as_ref() {
+            let _ = fs::remove_file(path);
+        }
+        return Err(CommandError::new(
+            "request_cancelled",
+            "Prompt refinement cancelled",
+        ));
     }
     let status = child.wait().await;
     let stderr_output = stderr_task.await.unwrap_or_default();

@@ -166,7 +166,7 @@
 <style>
   .welcome{min-height:100vh;display:grid;grid-template-columns:minmax(520px,1.25fr) minmax(340px,.75fr);background:var(--bg);color:var(--text)}
   .intro{padding:clamp(70px,12vh,130px) clamp(56px,8vw,128px);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;border-right:1px solid var(--border)}
-  .mark{--logo-pixel:var(--text);width:46px;height:46px;border:1px solid var(--border-strong);display:grid;place-items:center;border-radius:10px;background:var(--surface);margin-bottom:25px;color:#f5a524}
+  .mark{width:46px;height:46px;border:1px solid var(--border-strong);display:grid;place-items:center;border-radius:10px;background:#171818;margin-bottom:25px}
   .eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;color:var(--muted);margin:0 0 14px}
   h1{font-size:clamp(40px,4.2vw,64px);line-height:1.02;letter-spacing:-.045em;margin:0;max-width:760px;font-weight:630}
   .lede{font-size:16px;line-height:1.65;color:var(--muted);max-width:570px;margin:28px 0 30px}

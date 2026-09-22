@@ -27,6 +27,12 @@
 - Added twelve built-in art directions: Top-down adventure, SNES-era action RPG, Compact roguelike, Pixel platformer, NES 8-bit, Dark fantasy pixel, Paper cutout, Watercolor, Comic ink, Neon synth, Clay, and Voxel.
 - Replaced the placeholder SVG previews for those twelve styles with character thumbnails that match the generation look, and tightened each style’s short description and harness prompt.
 
+### Distribution
+
+- Added `.gitattributes` to normalize LF line endings across the repository.
+- Added Windows installer metadata (publisher, copyright, descriptions) and optional Authenticode signing in the release workflow when `WINDOWS_CERTIFICATE` secrets are configured.
+- Changed the Tauri bundle identifier from `com.jakes.sprite-maker` to `com.johnkinyanjui.sprite-studio`. Existing installs keep their data under the old app-data folder; new installs use a separate folder.
+
 ### Community providers
 
 - Added a Cursor CLI adapter for chat, with native Cursor Image generation through GenerateImage when Cursor 2.4 or later is authenticated (`agent login` or `CURSOR_API_KEY`).
