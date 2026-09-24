@@ -98,7 +98,32 @@ def validate_no_residual_bone_pixels(base, width, height, parts):
             )
 
 
-def validate_rig(spec, source_path, width, height, source, decoded_master_hash):
+def quality_gate(degraded, message):
+    """Fail a visual-quality gate, or record it when finalizing a spent repair budget."""
+    if degraded is None:
+        fail(message)
+    degraded.append(message)
+
+
+def soft_quality_check(degraded, check, *args):
+    """Run a visual-quality validator, recording its failure in degraded mode."""
+    if degraded is None:
+        return check(*args)
+    try:
+        check(*args)
+    except SystemExit as error:
+        degraded.append(str(error).removeprefix("sprite_rig: "))
+
+
+def validate_rig(spec, source_path, width, height, source, decoded_master_hash, degraded=None):
+    """Validate and pre-render a rig.
+
+    `degraded` is passed only by Sprite Studio's runtime after the per-request
+    repair budget is spent. Visual-quality gates (mask ownership, residual bone
+    pixels, locomotion mechanics) are then collected into that list instead of
+    aborting. Schema, source, bounds, IK, transparency, master-hash, and
+    distinct-frame checks remain hard failures.
+    """
     raw_version = spec.get("rigVersion", 1)
     if isinstance(raw_version, bool) or not isinstance(raw_version, int) or raw_version not in {1, 2, 3}:
         fail("rigVersion must be 1, 2, or 3")
@@ -249,15 +274,19 @@ def validate_rig(spec, source_path, width, height, source, decoded_master_hash):
             elif left.get("parent") == right_name:
                 child, parent = left, right
             else:
-                fail(
+                quality_gate(
+                    degraded,
                     f"parts {left_name!r} and {right_name!r} overlap {pixel_count} visible pixels "
-                    "but are not a declared parent-child joint"
+                    "but are not a declared parent-child joint",
                 )
+                continue
             if child.get("overlapMode") != "joint-cap":
-                fail(
+                quality_gate(
+                    degraded,
                     f"joint {parent['name']}->{child['name']} overlaps {pixel_count} visible pixels; "
-                    "declare overlapMode 'joint-cap' or make the masks exclusive"
+                    "declare overlapMode 'joint-cap' or make the masks exclusive",
                 )
+                continue
             smaller_part = min(len(visible_by_part[left_name]), len(visible_by_part[right_name]))
             scale_unit = max(1.0, min(width, height) / 64.0)
             cap_limit = max(1, min(
@@ -265,10 +294,12 @@ def validate_rig(spec, source_path, width, height, source, decoded_master_hash):
                 int(math.ceil(smaller_part * 0.25)),
             ))
             if pixel_count > cap_limit:
-                fail(
+                quality_gate(
+                    degraded,
                     f"joint-cap {parent['name']}->{child['name']} covers {pixel_count} pixels; "
-                    f"the bounded cap limit is {cap_limit}"
+                    f"the bounded cap limit is {cap_limit}",
                 )
+                continue
             attach = child["attach"]
             joint_point = parent["anchors"][attach["parentAnchor"]]
             joint_radius = max(2.5, min(width, height) / 32.0)
@@ -277,9 +308,10 @@ def validate_rig(spec, source_path, width, height, source, decoded_master_hash):
                 if point_distance((pixel[0] + 0.5, pixel[1] + 0.5), joint_point) > joint_radius
             ]
             if distant:
-                fail(
+                quality_gate(
+                    degraded,
                     f"joint-cap {parent['name']}->{child['name']} contains overlap pixels "
-                    f"outside the {joint_radius:.2f}px attachment neighborhood"
+                    f"outside the {joint_radius:.2f}px attachment neighborhood",
                 )
     else:
         claimed = {}
@@ -350,9 +382,11 @@ def validate_rig(spec, source_path, width, height, source, decoded_master_hash):
 
     base, layers = prepare_layers(source, width, height, parts, rig_version)
     if rig_version >= 3:
-        validate_no_residual_bone_pixels(base, width, height, parts)
+        soft_quality_check(degraded, validate_no_residual_bone_pixels, base, width, height, parts)
     matrices_by_frame = [resolve_frame_matrices(parts, frame) for frame in frames]
-    validate_articulated_motion(spec, names, frames, parts, matrices_by_frame)
+    soft_quality_check(
+        degraded, validate_articulated_motion, spec, names, frames, parts, matrices_by_frame,
+    )
     canvases = []
     for frame_index, frame in enumerate(frames):
         canvas, _ = render_frame(
@@ -369,11 +403,17 @@ def validate_rig(spec, source_path, width, height, source, decoded_master_hash):
         "uniqueRenderedFrames": len(set(rendered_frame_hashes)),
         "renderedFrameHashes": rendered_frame_hashes,
     }
+    if degraded is not None and quality["uniqueRenderedFrames"] < 2:
+        fail("an animation must render at least two distinct frames")
     if rig_version >= 2:
-        validate_v2_motion_quality(
+        soft_quality_check(
+            degraded, validate_v2_motion_quality,
             spec, width, height, source, parts, frames, base, layers, matrices_by_frame, canvases,
         )
         quality["mechanics"] = "passed"
+    if degraded:
+        quality["mechanics"] = "degraded"
+        quality["degradedChecks"] = list(degraded)
 
     master_hash = decoded_master_hash
     if "masterHash" in spec:

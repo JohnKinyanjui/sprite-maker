@@ -417,6 +417,8 @@ pub fn delete_workspace(id: String, state: State<'_, AppState>) -> CommandResult
 }
 
 #[cfg(test)]
+mod budget_finalize_tests;
+#[cfg(test)]
 mod rig_mcp_guard_tests;
 #[cfg(test)]
 mod rig_mcp_tests;

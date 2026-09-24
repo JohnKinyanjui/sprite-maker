@@ -2,7 +2,7 @@ use crate::{
     assets::{get_asset, read_generation_manifest},
     error::CommandResult,
     models::Animation,
-    rig::{interpolate_rig_frame, load_rig_by_id, render_frames, Rig},
+    rig::{interpolate_rig_frame, load_rig_by_id, render_master_frames, Rig},
     workspace::workspace_path,
     AppState,
 };
@@ -66,5 +66,5 @@ pub(crate) fn try_render_rig_transition(
         interpolate_rig_frame(&rig.frames[first_index], &rig.frames[second_index]);
     let mut render_rig = rig;
     render_rig.frames = vec![midpoint];
-    Ok(render_frames(&master, &render_rig).into_iter().next())
+    Ok(render_master_frames(std::path::Path::new(&asset.path), &master, &render_rig).into_iter().next())
 }

@@ -116,6 +116,9 @@ export type RefineGenerationPromptInput = {
 };
 export type SpriteGenerationMetadata = { kind: "sprite-generation"; name: string; category: string; fps: number; assetIds: string[]; animationId?: string };
 export type PackGenerationMetadata = { kind: "pack-generation"; packId: string };
+/** Explicit result of the request that produced an assistant message; only `published` may show a result card. */
+export type GenerationOutcomeStatus = "published" | "unpublished" | "failed" | "none";
+export type GenerationOutcomeMetadata = { kind: "generation-outcome"; requestId: string; status: GenerationOutcomeStatus };
 export type AnimationExportFormat = "sprite-studio" | "aseprite-json" | "texturepacker" | "godot-spriteframes";
 export type ExportResult = { pngPath: string; metadataPath: string; width: number; height: number; format: string };
 export type CharacterContractReport = { workspaceId: string; worktreeId: string; anchorSlug: string; passed: boolean; animationCount: number; animationReports: SizeContractReport[]; crossFacingViolations?: SizeContractViolation[] };

@@ -1,17 +1,24 @@
 use super::arguments::{provider_arguments, provider_stdin_bytes};
+use super::budget_finalize::{finalize_spent_budget, BudgetFinalization};
 use super::discovery::provider_process_path;
 use super::execute_finish::{finish_provider_run, FinishProviderRun};
 use super::external_source::generate_external_source;
 use super::headless::apply_tokio_headless_flags;
 use super::image_providers::StoredImageProvider;
 use super::prompt::create_provider_prompt_file;
+use super::repair_budget::RepairBudget;
 use super::stream::{append_stream_text, emit, parse_stream_line, provider_display_name};
 use crate::{
     conversations::{set_provider_session, update_message},
     workspace::workspace_path,
     AppState,
 };
-use std::{fs, path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Stdio,
+    time::{Duration, SystemTime},
+};
 use tauri::AppHandle;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -33,6 +40,11 @@ pub(crate) struct ProviderRun {
     pub(crate) image_provider: Option<StoredImageProvider>,
     pub(crate) image_prompt: String,
     pub(crate) provider_id: String,
+    /// Routed asset category; the budget finalizer only publishes into it.
+    pub(crate) category: Option<String>,
+    /// Set for master-only humanoid requests: the agent delivers a parts
+    /// sheet, which is assembled into the master at this canvas size.
+    pub(crate) parts_canvas: Option<(u32, u32)>,
 }
 
 fn remove_provider_canceller(state: &AppState, request_id: &str) {
@@ -62,6 +74,8 @@ pub(crate) async fn run_provider(
         image_provider,
         image_prompt,
         provider_id,
+        category,
+        parts_canvas,
     } = run;
     emit(
         app.as_ref(),
@@ -198,11 +212,13 @@ pub(crate) async fn run_provider(
         &reference_paths,
         prompt_file.as_deref(),
     );
+    // Taken before spawn so nothing this request writes can predate it.
+    let started_at = SystemTime::now();
     let mut command = Command::new(executable);
     command
         .args(&arguments)
         .env("PATH", provider_process_path(&provider_id))
-        .current_dir(workspace)
+        .current_dir(&workspace)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -274,6 +290,10 @@ pub(crate) async fn run_provider(
     });
     let mut response = String::new();
     let mut cancelled = false;
+    // Runtime-enforced repair budget: counted from the provider's own tool-call
+    // events, fresh for every request, independent of whether the agent obeys
+    // the prompt. When spent, the provider is stopped and finalized below.
+    let mut repair_budget = RepairBudget::default();
     if let Some(stdout) = child.stdout.take() {
         let mut lines = BufReader::new(stdout).lines();
         // Codex can spend several minutes planning or running a tool without
@@ -305,6 +325,11 @@ pub(crate) async fn run_provider(
                         if let Some(session_id) = session_id {
                             let _ = set_provider_session(&state, &conversation_id, &session_id);
                         }
+                        if let Some(exhaustion) = repair_budget.observe_line(&line) {
+                            emit(app.as_ref(), &state, &request_id, &conversation_id, "activity", format!("Repair budget reached — {}. Stopping {} and publishing the best structurally valid candidate", exhaustion.describe(), provider_display_name(&provider_id)));
+                            let _ = child.kill().await;
+                            break;
+                        }
                     }
                     Ok(None) => break,
                     Err(error) => {
@@ -319,6 +344,32 @@ pub(crate) async fn run_provider(
     let stderr_output = stderr_task.await.unwrap_or_default();
     if let Some(path) = prompt_file.as_ref() {
         let _ = fs::remove_file(path);
+    }
+    let mut budget_finalization: Option<BudgetFinalization> = None;
+    if let (Some(exhaustion), false) = (repair_budget.exhausted(), cancelled) {
+        // `workspace_path` reinstalls the bundled engine in case the agent
+        // edited it; then Sprite Studio (not the agent) produces the result.
+        let workspace = workspace_path(&state, &workspace_id).unwrap_or_else(|_| workspace.clone());
+        let finalize = finalize_spent_budget(&workspace, started_at, category.as_deref(), exhaustion);
+        tokio::pin!(finalize);
+        tokio::select! {
+            outcome = &mut finalize => budget_finalization = Some(outcome),
+            _ = &mut cancel_rx => cancelled = true,
+        }
+    }
+    let succeeded = status.as_ref().is_ok_and(|exit| exit.success());
+    if let (Some(canvas), true, false, true) =
+        (parts_canvas, succeeded, cancelled, budget_finalization.is_none())
+    {
+        // Parts first: Sprite Studio (not the agent) assembles the rest pose,
+        // master, and manifest, so the rig step gets an exact skeleton. With
+        // no parts this turn, the agent's single master stands as before.
+        let workspace = workspace_path(&state, &workspace_id).unwrap_or(workspace);
+        match crate::rig::assemble_fresh_parts(&workspace, started_at, Some(canvas)) {
+            Ok(Some(outcome)) => emit(app.as_ref(), &state, &request_id, &conversation_id, "activity", format!("Assembled {} body parts into {}", outcome.part_count, outcome.master_relative)),
+            Ok(None) => {}
+            Err(error) => emit(app.as_ref(), &state, &request_id, &conversation_id, "activity", format!("The parts sheet could not be assembled ({error}); using the single master instead")),
+        }
     }
     state
         .cancellers
@@ -337,5 +388,6 @@ pub(crate) async fn run_provider(
         cancelled,
         status,
         stderr_output: &stderr_output,
+        budget_finalization,
     });
 }

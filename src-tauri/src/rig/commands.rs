@@ -12,9 +12,9 @@ use std::path::Path;
 use tauri::State;
 use uuid::Uuid;
 
-use super::fit::{capsule_coverage, detect_morphology, shape_features, RigFitReport};
+use super::fit::{capsule_coverage, detect_morphology, shape_features, MorphologyScore, RigFitReport};
 use super::suggest::suggest_points;
-use super::suggestion::parse_rig_suggestion_text;
+use super::suggestion::{parse_frames_for_skeleton, parse_rig_suggestion_text};
 use super::types::{normalize_morphology, Rig, RigInput, RigSpec, RigSuggestion};
 use super::validate::validate_rig;
 
@@ -49,11 +49,38 @@ pub(crate) fn capture_chat_suggestion(
     Ok(Some(name))
 }
 
+/// The exact skeleton of a master assembled from a parts sheet.
+fn parts_suggestion(asset: &crate::models::Asset) -> Option<RigSuggestion> {
+    let parts = super::parts::load_for_master(Path::new(&asset.path))?;
+    Some(RigSuggestion {
+        morphology: "biped".to_string(),
+        points: parts.points,
+        bones: parts.bones,
+        frames: Vec::new(),
+        reasoning: "Skeleton assembled from the character's parts sheet".to_string(),
+        source: "parts".to_string(),
+    })
+}
+
 pub(crate) fn analyze_rig_fit_inner(
     state: &AppState,
     asset_id: &str,
 ) -> CommandResult<RigFitReport> {
-    let (_, master) = load_master_asset(state, asset_id)?;
+    let (asset, master) = load_master_asset(state, asset_id)?;
+    if let Some(suggestion) = parts_suggestion(&asset) {
+        // Parts masters stand in a legs-together rest pose by design; their
+        // joints are exact, so silhouette heuristics do not apply.
+        return Ok(RigFitReport {
+            detections: vec![MorphologyScore {
+                morphology: "biped".to_string(),
+                confidence: 1.0,
+                reasoning: "Assembled from separate body parts".to_string(),
+            }],
+            recommended: suggestion,
+            capsule_fit: 1.0,
+            warnings: Vec::new(),
+        });
+    }
     let detections = detect_morphology(&master)?;
     let best = detections.first().ok_or_else(|| {
         CommandError::new("morphology_failed", "The sprite could not be profiled")
@@ -329,7 +356,10 @@ pub(crate) fn suggest_rig_points_inner(
     asset_id: &str,
     morphology: Option<&str>,
 ) -> CommandResult<RigSuggestion> {
-    let (_, master) = load_master_asset(state, asset_id)?;
+    let (asset, master) = load_master_asset(state, asset_id)?;
+    if let Some(suggestion) = parts_suggestion(&asset) {
+        return Ok(suggestion);
+    }
     suggest_points(&master, &normalize_morphology(morphology))
 }
 
@@ -363,12 +393,22 @@ pub async fn ai_suggest_rig_points(
     let provider = input.provider_id.unwrap_or_else(|| "codex".to_string());
     let morphology = normalize_morphology(input.morphology.as_deref());
     let motion_intent = input.motion.as_deref().unwrap_or("").trim().to_string();
-    let mut prompt = crate::sprite_harness::rig_suggestion_prompt(
-        &motion_intent,
-        &morphology,
-        master.width(),
-        master.height(),
-    );
+    let skeleton = parts_suggestion(&asset);
+    let mut prompt = match &skeleton {
+        Some(skeleton) => crate::sprite_harness::rig_frames_prompt(
+            &motion_intent,
+            master.width(),
+            master.height(),
+            &skeleton.points,
+            &skeleton.bones,
+        ),
+        None => crate::sprite_harness::rig_suggestion_prompt(
+            &motion_intent,
+            &morphology,
+            master.width(),
+            master.height(),
+        ),
+    };
     let mut image_paths: Vec<String> = Vec::new();
     if provider == "codex" {
         image_paths.push(asset.path.clone());
@@ -392,6 +432,15 @@ pub async fn ai_suggest_rig_points(
         None,
     )
     .await?;
+    if let Some(skeleton) = skeleton {
+        return parse_frames_for_skeleton(&response, master.width(), master.height(), skeleton)
+            .ok_or_else(|| {
+                CommandError::new(
+                    "rig_suggestion_missing",
+                    "The provider replied without pose frames for the parts skeleton. Retry the animation.",
+                )
+            });
+    }
     parse_rig_suggestion_text(&response, master.width(), master.height()).ok_or_else(|| {
         CommandError::new(
             "rig_suggestion_missing",

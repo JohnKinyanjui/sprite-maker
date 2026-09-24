@@ -12,7 +12,7 @@ Use this harness whenever a character request has more than one frame. ImageGen 
 4. Write an exact circular motion table, including the final-to-first transition, then express every frame as transforms of those same pixels.
 5. Call MCP **`save_rig`** with the rig JSON bound to the master `assetId`. Run **`analyze_rig_fit`** and fix every reported issue before rendering.
 6. Call MCP **`render_rig_animation`** to emit frame PNGs and the draft animation in the workspace.
-7. Inspect the rendered loop. In Rig-only mode revise masks, pivots, transforms, and small joint patches. In explicit AI Polish/Full redraw mode, use the frame-polish contract only after this rough-loop inspection.
+7. Inspect the rendered loop headlessly: rerun the rig validator and read the frames or contact sheet in playback order, including last→first. Never open a browser or interactive preview. In Rig-only mode revise masks, pivots, transforms, and small joint patches. In explicit AI Polish/Full redraw mode, use the frame-polish contract only after this rough-loop inspection.
 
 ## Rig specification
 

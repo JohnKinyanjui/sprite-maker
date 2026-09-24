@@ -55,7 +55,7 @@ pub(super) fn explicit_size(prompt: &str) -> Option<(u32, u32)> {
         })
 }
 
-fn has_word(text: &str, expected: &str) -> bool {
+pub(super) fn has_word(text: &str, expected: &str) -> bool {
     text.split(|character: char| !character.is_ascii_alphanumeric())
         .any(|word| word == expected)
 }

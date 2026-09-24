@@ -1,6 +1,24 @@
 import { spriteGenerationCard, stripFrameSuffix } from "$lib/generation-reconcile";
 import { extractAssetPathsFromResponse, findAssetByManifestPath } from "$lib/manifest-path";
-import type { Animation, Asset, AssetPack, Message, PackGenerationMetadata, SpriteGenerationMetadata } from "$lib/types";
+import type { Animation, Asset, AssetPack, GenerationOutcomeMetadata, Message, PackGenerationMetadata, SpriteGenerationMetadata } from "$lib/types";
+
+/** Explicit request outcome stored on an assistant message by the finalizer. */
+export function generationOutcomeOf(message: Message): GenerationOutcomeMetadata | undefined {
+  const stored = message.metadata.generationOutcome;
+  if (!stored || typeof stored !== "object" || !("kind" in stored) || stored.kind !== "generation-outcome") return;
+  return stored as GenerationOutcomeMetadata;
+}
+
+/** Tolerance between an assistant turn starting and the library indexing its output. */
+const REQUEST_CLOCK_SLACK_MS = 5_000;
+
+/** Library items created before the request began cannot be that request's output. */
+function createdDuringOrAfter(message: Message, item: { createdAt: string }): boolean {
+  const started = Date.parse(message.createdAt);
+  const created = Date.parse(item.createdAt);
+  if (!Number.isFinite(started) || !Number.isFinite(created)) return true;
+  return created >= started - REQUEST_CLOCK_SLACK_MS;
+}
 
 function includesToken(content: string, token: string | undefined): boolean {
   const value = token?.trim().toLowerCase();
@@ -12,12 +30,16 @@ const GENERIC_ANIMATION_WORDS = new Set([
   "cozy", "pixel", "traveling", "walking", "moving", "motion", "preview",
 ]);
 
+/** Withheld-result phrasing without the explicit marker. Keep in sync with `reports_withheld_publication` in Rust. */
+const WITHHELD_PUBLICATION = /unpublished|not (?:been )?published|(?:did not|didn't|could not|couldn't|cannot|can't) publish/;
+
 export function reportsGenerationFailure(content: string): boolean {
   const lower = content.toLowerCase();
   return lower.includes("generation_failed:")
     || lower.includes("unable to publish the")
     || lower.includes("withdrawing the candidate")
-    || (lower.includes("did not pass the final visual acceptance gate") && lower.includes("restor"));
+    || (lower.includes("did not pass the final visual acceptance gate") && lower.includes("restor"))
+    || WITHHELD_PUBLICATION.test(lower);
 }
 
 export function reportsGenerationWarning(content: string): boolean {
@@ -103,6 +125,19 @@ function sanitizeGenerationMetadata(
 
 export function inferMessageGeneration(message: Message, assets: Asset[], animations: Animation[]): SpriteGenerationMetadata | undefined {
   if (message.role !== "assistant" || message.status !== "completed" || reportsGenerationFailure(message.content)) return;
+  const outcome = generationOutcomeOf(message);
+  if (outcome) {
+    // The finalizer recorded exactly what this request published. Never fall
+    // back to guessing from prose, which can bind an older asset or animation.
+    if (outcome.status !== "published") return;
+    const stored = message.metadata.generation;
+    if (!stored || typeof stored !== "object" || !("kind" in stored) || stored.kind !== "sprite-generation") return;
+    const metadata = stored as SpriteGenerationMetadata;
+    const resolved = metadata.assetIds
+      .map(id => assets.find(asset => asset.id === id))
+      .filter((asset): asset is Asset => Boolean(asset));
+    return resolved.length === metadata.assetIds.length && resolved.length ? metadata : undefined;
+  }
   const staticOnly = reportsStaticSpriteOnlyIntent(message.content);
   const responsePaths = extractAssetPathsFromResponse(message.content);
   const pathResolvedAssets = responsePaths
@@ -127,8 +162,11 @@ export function inferMessageGeneration(message: Message, assets: Asset[], animat
   if (pathResolvedAssets.length) {
     return generationFromResponsePaths(pathResolvedAssets, animations, staticOnly || pathResolvedAssets.length === 1);
   }
+  // Legacy messages without an explicit outcome: prose matching may only bind
+  // assets and animations that did not exist before this turn started.
   const content = message.content.toLowerCase();
-  const mentionedAssets = assets.filter(asset =>
+  const freshAnimations = animations.filter(animation => createdDuringOrAfter(message, animation));
+  const mentionedAssets = assets.filter(asset => createdDuringOrAfter(message, asset)).filter(asset =>
     includesToken(content, asset.relativePath)
     || includesToken(content, asset.path)
     || includesToken(content, `${asset.name}.${asset.format}`)
@@ -136,7 +174,7 @@ export function inferMessageGeneration(message: Message, assets: Asset[], animat
   );
   const mentionedIds = new Set(mentionedAssets.map(asset => asset.id));
 
-  const frameLinked = animations
+  const frameLinked = freshAnimations
     .map(animation => ({
       animation,
       frameMatches: animation.frames.filter(frame => mentionedIds.has(frame.assetId)).length,
@@ -148,7 +186,7 @@ export function inferMessageGeneration(message: Message, assets: Asset[], animat
     : undefined;
   if (animationGeneration) return animationGeneration;
   if (!mentionedAssets.length && !staticOnly) {
-    const nameMatched = animations.find(animation => animation.name.length >= 8 && mentionsAnimation(content, animation.name));
+    const nameMatched = freshAnimations.find(animation => animation.name.length >= 8 && mentionsAnimation(content, animation.name));
     return nameMatched ? generationFromAnimation(nameMatched, assets) : undefined;
   }
 
@@ -163,13 +201,16 @@ export function inferMessageGeneration(message: Message, assets: Asset[], animat
 
 export function inferMessagePack(message: Message, packs: AssetPack[]): { pack: AssetPack; metadata: PackGenerationMetadata } | undefined {
   if (message.role !== "assistant" || message.status !== "completed" || reportsGenerationFailure(message.content)) return;
+  const outcome = generationOutcomeOf(message);
+  if (outcome && outcome.status !== "published") return;
   const stored = message.metadata.packGeneration;
   if (stored && typeof stored === "object" && "kind" in stored && stored.kind === "pack-generation" && "packId" in stored) {
     const pack = packs.find(item => item.id === stored.packId);
     if (pack) return { pack, metadata: stored as PackGenerationMetadata };
   }
+  if (outcome) return;
   const content = message.content.toLowerCase();
-  const pack = packs.find(item =>
+  const pack = packs.filter(item => createdDuringOrAfter(message, item)).find(item =>
     includesToken(content, item.id)
     || includesToken(content, item.name)
     || item.files.some(file => includesToken(content, file))

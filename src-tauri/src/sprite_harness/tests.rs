@@ -1,6 +1,6 @@
 use super::{
-    clean_refined_prompt_response, explicit_size, infer_brief, refine_generation_prompt, studio_prompt,
-    HarnessKind, SpriteBrief,
+    clean_refined_prompt_response, explicit_size, infer_brief, parts_master_canvas,
+    refine_generation_prompt, rig_frames_prompt, studio_prompt, HarnessKind, SpriteBrief,
 };
 use crate::models::GenerationOptions;
 
@@ -505,9 +505,61 @@ fn animation_harness_requires_a_reproducible_rig_and_optional_polish() {
     assert!(prompt.contains("final-to-first"));
     assert!(prompt.contains("limb count"));
     assert!(prompt.contains("dirty alpha"));
-    assert!(prompt.contains("preview at least three cycles"));
+    assert!(prompt.contains("validate the loop headlessly"));
     assert!(prompt.contains("sprite_rig.py"));
     assert!(!prompt.contains("one high-quality AI frame per image call"));
+}
+
+#[test]
+fn generation_prompts_validate_headlessly_within_a_bounded_budget() {
+    // Reproduced: "make a running man" stalled because the agent tried to open
+    // a Chrome playback preview for a required three-cycle approval, then
+    // looped on one-pixel seam repairs.
+    let prompts = [
+        studio_prompt("make a running man", None, None, None, None, None, false),
+        studio_prompt(
+            "/animate this rabbit hopping",
+            Some("Context asset: assets/creatures/rabbit.png"),
+            None,
+            Some("animate"),
+            None,
+            None,
+            false,
+        ),
+        studio_prompt(
+            "/pack forest potions",
+            None,
+            None,
+            Some("pack"),
+            None,
+            None,
+            false,
+        ),
+        studio_prompt("make a running man", None, None, None, None, None, true),
+    ];
+    for prompt in &prompts {
+        assert!(
+            !prompt.contains("preview at least three"),
+            "prompt still demands an interactive playback preview"
+        );
+        assert!(!prompt.contains("three complete cycles"));
+    }
+    for prompt in &prompts[..3] {
+        assert!(prompt.contains("Never open a browser"));
+        assert!(prompt.contains("computer-use"));
+        assert!(prompt.contains("at most three validate→fix cycles"));
+        assert!(prompt.contains("never iterate pixel by pixel"));
+        assert!(prompt.contains("GENERATION_FAILED: <reason>"));
+    }
+    let running_man = &prompts[0];
+    assert!(running_man.contains("do not open Chrome or any browser"));
+    assert!(running_man.contains("continue with the headless checks"));
+    assert!(running_man.contains("sprite_rig_analyze_motion"));
+    assert!(running_man.contains("enforces this budget at runtime"));
+    // Reproduced: Codex has no Sprite Studio MCP rig tools and answered
+    // GENERATION_FAILED because the embedded harness names only MCP calls.
+    assert!(running_man.contains("missing MCP tools are never a reason to fail"));
+    assert!(running_man.contains("sprite_rig.py --check RIG.json"));
 }
 
 #[test]
@@ -641,4 +693,68 @@ fn clean_refined_prompt_response_strips_code_fences() {
         clean_refined_prompt_response("```\n/animate A crisp 8-frame run cycle.\n```"),
         "/animate A crisp 8-frame run cycle."
     );
+}
+
+#[test]
+fn humanoid_master_phase_asks_for_a_parts_sheet() {
+    let generation = GenerationOptions {
+        quality: "mid".into(),
+        width: 128,
+        height: 128,
+        frames: 1,
+        fps: 1,
+        frame_mode: "fixed".into(),
+        min_frames: 1,
+        max_frames: 1,
+        allow_interpolation: false,
+        allow_auto_adjust: true,
+    };
+    assert_eq!(
+        parts_master_canvas("make a running man", "", Some(&generation), None, true),
+        Some((128, 128))
+    );
+    // Only master-only humanoid requests switch contracts.
+    assert_eq!(parts_master_canvas("make a running man", "", Some(&generation), None, false), None);
+    assert_eq!(parts_master_canvas("create a butterfly flying around", "", None, None, true), None);
+    assert_eq!(parts_master_canvas("make a running man", "", None, Some("pack"), true), None);
+    let prompt = studio_prompt("make a running man", None, Some(&generation), None, Some("codex"), None, true);
+    let deliverable = prompt.find("DELIVERABLE: separate body parts").expect("parts deliverable");
+    assert!(deliverable < prompt.find("Create exactly ONE transparent").unwrap(), "parts come first");
+    assert!(prompt.contains(".sprite-studio/parts/<slug>/"));
+    assert!(prompt.contains("thigh_far.png"));
+    assert!(prompt.contains("\"canvas\": [128, 128]"));
+    assert!(prompt.contains("MASTER HANDOFF CONTRACT"), "single master stays as the fallback");
+    let creature = studio_prompt("create a butterfly flying around", None, None, None, None, None, true);
+    assert!(!creature.contains("PARTS HANDOFF CONTRACT"));
+}
+
+#[test]
+fn pose_prompt_for_a_parts_rig_fixes_the_skeleton_and_rotation_signs() {
+    let point = |name: &str, kind: &str, y: f64| crate::rig::RigPoint {
+        id: name.into(),
+        name: name.into(),
+        kind: kind.into(),
+        x: 64.0,
+        y,
+        confidence: 1.0,
+        source: "parts".into(),
+        note: None,
+    };
+    let points = vec![point("hip_r", "joint", 70.0), point("knee_r", "joint", 90.0), point("foot_r", "contact", 120.5)];
+    let bones = vec![crate::rig::RigBone {
+        id: "b1".into(),
+        name: "thigh_r".into(),
+        start_point: "hip_r".into(),
+        end_point: "knee_r".into(),
+        radius: 3.0,
+        parent: Some("torso".into()),
+        z: 7,
+    }];
+    let prompt = rig_frames_prompt("run cycle", 128, 128, &points, &bones);
+    assert!(prompt.contains("Do not propose points or bones"));
+    assert!(prompt.contains("ground line y ≈ 120.5"));
+    assert!(prompt.contains("- thigh_r: hip_r → knee_r, parent torso, z 7"));
+    assert!(prompt.contains("FORWARD (toward +x) is NEGATIVE"));
+    assert!(prompt.contains("Never bend a knee forward"));
+    assert!(prompt.contains("MOTION INTENT\nrun cycle"));
 }

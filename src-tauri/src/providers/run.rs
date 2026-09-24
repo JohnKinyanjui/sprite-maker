@@ -11,7 +11,7 @@ use crate::{
     models::ProviderRequestOptions,
     references,
     pipeline::anchor_contract_text,
-    sprite_harness::studio_prompt,
+    sprite_harness::{parts_master_canvas, routed_category, studio_prompt},
     workspace::workspace_path,
     AppState,
 };
@@ -196,6 +196,16 @@ pub(crate) fn start_provider_run(
         executable,
         image_provider,
         image_prompt,
+        category: Some(
+            routed_category(&prompt, &combined_context, options.command.as_deref()).to_string(),
+        ),
+        parts_canvas: parts_master_canvas(
+            &prompt,
+            &combined_context,
+            options.generation.as_ref(),
+            options.command.as_deref(),
+            options.native_rig_master_only,
+        ),
         provider_id,
     };
     tauri::async_runtime::spawn(async move {

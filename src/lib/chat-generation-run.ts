@@ -2,12 +2,12 @@ import { api } from "$lib/api";
 import {
   type ActiveChatRequest, type GenerationViewHandoff, animationFrameAssets, buildFullRedrawPrompt,
   buildProviderOptions, buildRigPolishPrompt, conversationTitleFromPrompt, findGeneratedPack,
-  generationViewHandoff, isFreshGenerationManifest, isRejectedStaticAnimation, manifestPlaybackFps,
+  generationOutcome, generationViewHandoff, isFreshGenerationManifest, isRejectedStaticAnimation, manifestPlaybackFps,
   mergeAssistantGenerationMetadata, mergeGeneratedAssets, orderedGenerationAssets, packGenerationCard,
-  relatedGenerationAssets, shouldAttachSpriteCard, shouldSaveGeneratedAnimation, spriteCardForOrderedAssets,
-  stripFrameSuffix,
+  relatedGenerationAssets, requestAssistantMessage, shouldAttachSpriteCard, shouldSaveGeneratedAnimation,
+  spriteCardForOrderedAssets, stripFrameSuffix,
 } from "$lib/chat-generation-finalize";
-import { assetsFromManifestPaths, findAnimationWithOrderedFrames, latestCompletedAssistant } from "$lib/generation-reconcile";
+import { assetsFromManifestPaths, findAnimationWithOrderedFrames } from "$lib/generation-reconcile";
 import { reportsGenerationFailure } from "$lib/message-generations";
 import {
   extractAssetPathsFromResponse, normalizeManifestPath, shouldRecoverAssetsFromResponse,
@@ -37,6 +37,7 @@ export async function startChatRequest(input: {
   phase?: ActiveChatRequest["phase"];
   masterAssetId?: string;
   motion?: string;
+  animationGeneration?: ProviderRequestOptions["generation"];
 }): Promise<StartedChatRequest> {
   const previousGenerationFingerprint = await api.getGenerationFingerprint(input.workspaceId).catch(() => null);
   const startedAt = Date.now();
@@ -49,6 +50,7 @@ export async function startChatRequest(input: {
     prompt: input.prompt,
     command: input.options.command,
     generation: input.options.generation,
+    animationGeneration: input.animationGeneration,
     knownPackIds: input.knownPackIds,
     previousGenerationFingerprint: previousGenerationFingerprint ?? undefined,
     startedAt,
@@ -58,6 +60,7 @@ export async function startChatRequest(input: {
     motion: input.motion,
   };
   const messages = await api.listMessages(input.conversation.id);
+  request.assistantMessageId = messages.findLast(message => message.role === "assistant" && message.status === "running")?.id;
   if (input.conversation.title !== "New conversation") return { request, messages };
   const title = conversationTitleFromPrompt(input.prompt);
   await api.renameConversation(input.conversation.id, title);
@@ -191,10 +194,11 @@ export async function runNativeRigChatAnimation(input: NativeRigChatInput): Prom
     onFitWarning: input.onFitWarning,
   }, input.onActivity);
   request.rigId = orchestrated.rig.id;
-  const notices = [
+  // The orchestrator's warning already falls back to the fit warning.
+  const notices = [...new Set([
     orchestrated.warning,
     orchestrated.fitReport?.warnings[0],
-  ].filter(Boolean);
+  ].filter(Boolean))];
   const assistantText = notices.length
     ? `Rendered ${orchestrated.render.animation.frames.length} native rig frames for ${input.asset.name}. GENERATION_WARNING: ${notices.join(" ")}`
     : `Rendered ${orchestrated.render.animation.frames.length} native rig frames for ${input.asset.name}. Open the Rig tab to adjust points and poses.`;
@@ -213,10 +217,12 @@ export async function runNativeRigChatAnimation(input: NativeRigChatInput): Prom
   }
   const assistant = messages.findLast(message => message.role === "assistant");
   if (assistant) {
-    await api.updateMessageMetadata(assistant.id, {
-      ...assistant.metadata,
-      generation: spriteCardForOrderedAssets(ordered, orchestrated.render.animation.fps, orchestrated.render.animation.id),
-    });
+    await api.updateMessageMetadata(assistant.id, mergeAssistantGenerationMetadata(assistant.metadata, {
+      generation: ordered.length
+        ? spriteCardForOrderedAssets(ordered, orchestrated.render.animation.fps, orchestrated.render.animation.id)
+        : undefined,
+      outcome: { kind: "generation-outcome", requestId: request.id, status: ordered.length ? "published" : "unpublished" },
+    }));
   }
   void api.queueQualityAnalysis(orchestrated.render.animation.id).catch(() => undefined);
   let renamed: Conversation | undefined;
@@ -247,6 +253,11 @@ export type MasterContinuationFailure = {
 };
 
 /** After a master-only provider pass, continue with native rig orchestration on the new master. */
+/** Animation settings for the native rig step that follows a request. */
+export function rigGenerationSettings(prior: Pick<ActiveChatRequest, "generation" | "animationGeneration">): ActiveChatRequest["generation"] {
+  return prior.animationGeneration ?? prior.generation;
+}
+
 export async function continueNativeRigAfterMaster(
   prior: ActiveChatRequest,
   conversation: Conversation,
@@ -319,18 +330,19 @@ export async function continueNativeRigAfterMaster(
     };
   }
   const motion = prior.motion ?? extractAnimateMotion(prior.prompt);
+  const generation = rigGenerationSettings(prior);
   const profile = {
     profileVersion: 8,
-    quality: prior.generation.quality,
-    width: prior.generation.width,
-    height: prior.generation.height,
-    frames: prior.generation.frames,
-    fps: prior.generation.fps,
-    frameMode: prior.generation.frameMode,
-    minFrames: prior.generation.minFrames,
-    maxFrames: prior.generation.maxFrames,
-    allowInterpolation: prior.generation.allowInterpolation,
-    allowAutoAdjust: prior.generation.allowAutoAdjust,
+    quality: generation.quality,
+    width: generation.width,
+    height: generation.height,
+    frames: generation.frames,
+    fps: generation.fps,
+    frameMode: generation.frameMode,
+    minFrames: generation.minFrames,
+    maxFrames: generation.maxFrames,
+    allowInterpolation: generation.allowInterpolation,
+    allowAutoAdjust: generation.allowAutoAdjust,
     model: model ?? "",
     reasoningEffort: reasoningEffort ?? "",
     imageProviderId: "",
@@ -362,6 +374,21 @@ export type MasterPhaseContinuation =
   | { kind: "handoff-started"; request: ActiveChatRequest; messages: Message[]; renamed?: Conversation }
   | { kind: "finalize-fallback"; reason: string; details?: Record<string, unknown> };
 
+/**
+ * The master-only reply only prepares the rig step, whose own message carries
+ * the animation card. Record that explicitly so the chat never guesses a
+ * second card from the master reply's prose.
+ */
+async function markMasterPhaseMessage(prior: ActiveChatRequest): Promise<void> {
+  if (!prior.assistantMessageId) return;
+  const messages = await api.listMessages(prior.conversationId).catch(() => [] as Message[]);
+  const message = messages.find(item => item.id === prior.assistantMessageId);
+  if (!message) return;
+  await api.updateMessageMetadata(message.id, mergeAssistantGenerationMetadata(message.metadata, {
+    outcome: { kind: "generation-outcome", requestId: prior.id, status: "none" },
+  })).catch(() => undefined);
+}
+
 /** Continue native rig and optional polish handoff after a master-only provider pass. */
 export async function continueAfterMasterProviderPhase(input: {
   prior: ActiveChatRequest;
@@ -379,6 +406,7 @@ export async function continueAfterMasterProviderPhase(input: {
   masterResponse?: string;
   parallelGenerationActive?: boolean;
 }): Promise<MasterPhaseContinuation> {
+  await markMasterPhaseMessage(input.prior);
   const continued = await continueNativeRigAfterMaster(
     input.prior,
     input.conversation,
@@ -578,17 +606,26 @@ export async function completeChatGeneration(
     }
   }
   const attachSpriteCard = shouldAttachSpriteCard(request.command, ordered);
-  if (attachSpriteCard || generatedPack) {
-    const requestMessages = await api.listMessages(request.conversationId);
-    const assistant = latestCompletedAssistant(requestMessages);
-    if (assistant) {
-      await api.updateMessageMetadata(assistant.id, mergeAssistantGenerationMetadata(assistant.metadata, {
-        generation: attachSpriteCard
-          ? spriteCardForOrderedAssets(ordered, manifestFps, animationId)
-          : undefined,
-        packGeneration: generatedPack ? packGenerationCard(generatedPack.id) : undefined,
-      }));
-    }
+  const outcome = generationOutcome({
+    requestId: request.id,
+    command: request.command,
+    generationFailed,
+    ordered,
+    generatedPack,
+    rejectedStaticAnimation: rejectedStatic,
+  });
+  // Always record the explicit outcome on this request's own message so the
+  // chat never guesses a result card (possibly an older asset) from prose.
+  const requestMessages = await api.listMessages(request.conversationId);
+  const assistant = requestAssistantMessage(requestMessages, request);
+  if (assistant) {
+    await api.updateMessageMetadata(assistant.id, mergeAssistantGenerationMetadata(assistant.metadata, {
+      generation: attachSpriteCard
+        ? spriteCardForOrderedAssets(ordered, manifestFps, animationId)
+        : undefined,
+      packGeneration: generatedPack ? packGenerationCard(generatedPack.id) : undefined,
+      outcome,
+    }));
   }
   const rigs = await api.listRigs(request.workspaceId, request.worktreeId).catch(() => current.rigs);
   const worktreeMatches = current.selectedWorktreeId === request.worktreeId;

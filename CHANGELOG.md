@@ -52,6 +52,26 @@
 - Hid the empty console windows that flashed when Cursor CLI started bash tool processes.
 - Fixed deterministic rig rendering on Windows so `os.fsync` no longer uses a read-only handle (`Errno 9`).
 
+## 0.3.3 — 2026-09-25
+
+### Animation
+
+- Humanoid characters are now built from a parts sheet: the agent delivers separate head, torso, and near/far arm and leg parts, and Sprite Studio assembles them into an exact rest pose, master, and skeleton. Frames move whole parts, so far limbs stay complete when near limbs swing and joints no longer tear or smear. Rotated parts use RotSprite-style 8× Scale2x sampling. Non-humanoid requests and failed part sheets fall back to the single-master rig.
+- The rig pose step for a parts skeleton asks only for frames, with explicit rotation-sign rules for right-facing figures (legs and arms forward are negative, knees only fold backward).
+- Fixed the automatic master → rig chain rendering 2 frames at 1 FPS: the rig step now uses the chat's animation settings instead of the master pass's single-frame override.
+- Runtime repair budget: rig validate→fix loops and repeated rerenders are counted from the provider's own tool calls; when spent, the provider is stopped and Sprite Studio publishes the latest structurally valid render with a warning.
+- Generation prompts validate playback headlessly (no browser previews) and fall back to `.sprite-studio/sprite_rig.py` when MCP rig tools are unavailable.
+
+### Chat
+
+- Each request records an explicit outcome; failed or withheld results no longer show an older asset's card, and replies that withhold a result without `GENERATION_FAILED` are shown as failures.
+- Finishing a generation no longer switches you to the Animate or Sprites tab, and never rewrites the messages of a chat you have since left.
+- The sidebar chat item reads "Back to chat" outside the chat view and returns to the open conversation; unexpected UI errors now show a toast instead of failing silently.
+
+### Distribution
+
+- The release workflow now also builds the universal (Apple Silicon + Intel) macOS DMG and app archive.
+
 ## 0.3.2 — 2026-08-19
 
 ### Animation reliability

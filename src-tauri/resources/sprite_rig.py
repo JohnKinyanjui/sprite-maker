@@ -25,10 +25,14 @@ from sprite_tool import slug
 def main():
     validate_only = len(sys.argv) == 3 and sys.argv[1] == "--validate"
     check_only = len(sys.argv) == 3 and sys.argv[1] == "--check"
-    if not (len(sys.argv) == 2 or validate_only or check_only):
+    # Runtime-only: Sprite Studio renders the latest rig this way after the
+    # provider's per-request repair budget is spent. Visual-quality gate
+    # failures become recorded warnings; structural checks stay fatal.
+    finalize_degraded = len(sys.argv) == 3 and sys.argv[1] == "--finalize-degraded"
+    if not (len(sys.argv) == 2 or validate_only or check_only or finalize_degraded):
         fail("usage: python3 .sprite-studio/sprite_rig.py [--check|--validate] RIG.json")
     workspace = Path.cwd().resolve()
-    spec_path = Path(sys.argv[2] if (validate_only or check_only) else sys.argv[1])
+    spec_path = Path(sys.argv[2] if (validate_only or check_only or finalize_degraded) else sys.argv[1])
     if not spec_path.is_absolute():
         spec_path = workspace / spec_path
     resolved_spec_path = spec_path.resolve()
@@ -60,8 +64,9 @@ def main():
     category = slug(spec.get("category", "characters"))
     if category not in {"characters", "creatures", "terrain", "props", "effects"}:
         fail("category must be characters, creatures, terrain, props, or effects")
+    degraded = [] if finalize_degraded else None
     names, frames, parts, warnings, master_hash, base, layers, quality, canvases = validate_rig(
-        spec, source_path, width, height, source, decoded_master_hash,
+        spec, source_path, width, height, source, decoded_master_hash, degraded,
     )
     rig_hash = hashlib.sha256(
         strict_json_dumps(spec, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -166,6 +171,8 @@ def main():
         "planningMode": "ai-rig-deterministic-render",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
     }
+    if degraded:
+        manifest["qualityWarnings"] = degraded
     lock = acquire_render_lock(workspace)
     try:
         try:

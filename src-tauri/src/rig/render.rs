@@ -13,13 +13,13 @@ use rusqlite::OptionalExtension;
 use tauri::State;
 
 use super::commands::rig_input_to_rig;
-use super::skin::render_frames;
+use super::parts_render::render_master_frames;
 use super::types::{Rig, RigInput, RigRenderResult};
 use super::validate::validate_perceptible_rig_motion;
 
 pub(crate) fn render_rig_frames_blocking(master_path: String, rig: Rig) -> CommandResult<Vec<RgbaImage>> {
     let master = image::open(&master_path)?.to_rgba8();
-    Ok(render_frames(&master, &rig))
+    Ok(render_master_frames(std::path::Path::new(&master_path), &master, &rig))
 }
 
 #[tauri::command]

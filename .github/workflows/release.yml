@@ -24,6 +24,9 @@ jobs:
             platform: ubuntu-22.04
           - name: Windows installers
             platform: windows-latest
+          - name: macOS universal installers
+            platform: macos-latest
+            args: --target universal-apple-darwin
 
     runs-on: ${{ matrix.platform }}
 
@@ -38,6 +41,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -53,6 +58,8 @@ jobs:
         run: |
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1
+          elif [ "${{ matrix.platform }}" = "macos-latest" ]; then
+            bash scripts/fetch-ffmpeg.sh --universal-macos
           else
             bash scripts/fetch-ffmpeg.sh
           fi
@@ -89,13 +96,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: ${{ env.TAURI_ARGS }}
+          args: ${{ matrix.args }} ${{ env.TAURI_ARGS }}
           tagName: v__VERSION__
           releaseName: Sprite Studio v__VERSION__
           releaseBody: |
-            Native Sprite Studio installers for Windows and Linux.
+            Native Sprite Studio installers for Windows, Linux, and macOS (universal: Apple Silicon and Intel).
 
-            The macOS universal DMG and app archive are built locally and attached separately to avoid GitHub's higher macOS runner costs.
+            The macOS build is not notarized; on first launch, right-click the app and choose Open.
 
             See CHANGELOG.md for release details.
           releaseDraft: false

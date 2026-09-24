@@ -45,6 +45,18 @@ describe("generation reconcile", () => {
     expect(shouldHydrateGeneration({ ...assistant, metadata: { generation: spriteGenerationCard(files, "slug", "creatures", 8) } }, manifest, files)).toBe(false);
   });
 
+  test("never hydrates an older manifest onto a turn that did not publish it", () => {
+    const files = [asset("a1", "slug_01"), asset("a2", "slug_02")];
+    const staleManifest: GenerationManifest = { name: "slug", category: "creatures", fps: 8, files: files.map(item => item.relativePath), generatedAt: "2026-09-20T10:00:00Z" };
+    const assistant: Message = { id: "m", conversationId: "c", role: "assistant", kind: "text", content: "Reworked the slug cycle; see assets/creatures/slug_01.png", status: "completed", metadata: {}, createdAt: "2026-09-25T12:00:00Z" };
+    expect(shouldHydrateGeneration(assistant, staleManifest, files)).toBe(false);
+    const freshManifest = { ...staleManifest, generatedAt: "2026-09-25T12:04:00Z" };
+    expect(shouldHydrateGeneration(assistant, freshManifest, files)).toBe(true);
+    const unpublished = { ...assistant, metadata: { generationOutcome: { kind: "generation-outcome", requestId: "r", status: "unpublished" } } };
+    expect(shouldHydrateGeneration(unpublished, freshManifest, files)).toBe(false);
+    expect(shouldHydrateGeneration({ ...assistant, status: "failed" }, freshManifest, files)).toBe(false);
+  });
+
   test("builds animation names from the scan without the i-flag suffix strip", () => {
     const ordered = [asset("a1", "Hero_01")];
     expect(animationNameFromScan(null, ordered)).toBe("Hero");

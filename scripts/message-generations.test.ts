@@ -134,6 +134,60 @@ describe("inferMessageGeneration", () => {
     expect(result?.fps).toBe(1);
   });
 
+  describe("reproduced running-man failure", () => {
+    const oldFrames = [
+      { ...asset("c1", "cinder_courier_jog_cycle_01"), createdAt: "2026-09-20T10:00:00Z" },
+      { ...asset("c2", "cinder_courier_jog_cycle_02"), createdAt: "2026-09-20T10:00:00Z" },
+    ];
+    const oldAnimation: Animation = {
+      id: "cinder", workspaceId: "workspace", name: "cinder-courier-jog-cycle", fps: 10, looping: true,
+      frames: oldFrames.map(item => ({ assetId: item.id })), createdAt: "2026-09-20T10:00:00Z", updatedAt: "2026-09-20T10:00:00Z",
+    };
+    const turn = (content: string, metadata: Record<string, unknown> = {}): Message => ({
+      ...message(content), metadata, createdAt: "2026-09-25T12:00:00Z",
+    });
+
+    test("an agent that withholds its result without the marker is a failure", () => {
+      const withheld = turn("Generated the master, draft rig, and 8 frames, but playback approval was denied, so the generated run cycle is unpublished.");
+      expect(reportsGenerationFailure(withheld.content)).toBe(true);
+      expect(inferMessageGeneration(withheld, oldFrames, [oldAnimation])).toBeUndefined();
+    });
+
+    test("an explicit unpublished outcome never shows an older animation card", () => {
+      const unpublished = turn(
+        "Rendered the running cycle; review of the loop is pending.",
+        { generationOutcome: { kind: "generation-outcome", requestId: "req-run", status: "unpublished" } },
+      );
+      expect(inferMessageGeneration(unpublished, oldFrames, [oldAnimation])).toBeUndefined();
+      const failed = turn(
+        "Rendered the running cycle.",
+        {
+          generation: { kind: "sprite-generation", name: "cinder-courier-jog-cycle", category: "creatures", fps: 10, assetIds: ["c1", "c2"], animationId: "cinder" },
+          generationOutcome: { kind: "generation-outcome", requestId: "req-run", status: "failed" },
+        },
+      );
+      expect(inferMessageGeneration(failed, oldFrames, [oldAnimation])).toBeUndefined();
+    });
+
+    test("a published outcome shows only the card recorded for that request", () => {
+      const newFrames = [
+        { ...asset("r1", "running_man_run_01"), createdAt: "2026-09-25T12:03:00Z" },
+        { ...asset("r2", "running_man_run_02"), createdAt: "2026-09-25T12:03:00Z" },
+      ];
+      const card = { kind: "sprite-generation", name: "running_man_run", category: "creatures", fps: 10, assetIds: ["r1", "r2"] };
+      const published = turn(
+        "Published the running man. Its stride is snappier than the cinder courier jog cycle.",
+        { generation: card, generationOutcome: { kind: "generation-outcome", requestId: "req-run", status: "published" } },
+      );
+      expect(inferMessageGeneration(published, [...oldFrames, ...newFrames], [oldAnimation])).toEqual(card as never);
+    });
+
+    test("legacy prose matching ignores animations that predate the turn", () => {
+      const legacy = turn("Finished the running cycle for the courier.");
+      expect(inferMessageGeneration(legacy, oldFrames, [oldAnimation])).toBeUndefined();
+    });
+  });
+
   test("keeps the best artifact when generation completes with a warning", () => {
     const warned = message("Published the best valid lion gallop. GENERATION_WARNING: minor top-down anatomy seam remains.");
     warned.metadata = { generation: { kind: "sprite-generation", name: "lion-gallop", category: "creatures", fps: 10, assetIds: ["lion"] } };

@@ -1,6 +1,7 @@
 mod antigravity_stream;
 mod arguments;
 mod auth;
+mod budget_finalize;
 mod cursor_stream;
 mod detect;
 mod discovery;
@@ -13,6 +14,7 @@ mod modes;
 mod probes;
 mod prompt;
 mod refine;
+mod repair_budget;
 mod run;
 mod stream;
 
@@ -71,5 +73,14 @@ use discovery::{login_shell_path, login_shell_path_with_timeout, provider_enviro
 
 #[cfg(test)]
 mod discovery_tests;
+#[cfg(test)]
+pub(crate) use budget_finalize::{finalize_spent_budget, BudgetFinalization};
+#[cfg(test)]
+pub(crate) use repair_budget::BudgetExhaustion;
+#[cfg(test)]
+pub(crate) use stream::response_reports_generation_failure as reports_generation_failure;
+
+#[cfg(test)]
+mod repair_budget_tests;
 #[cfg(test)]
 mod stream_tests;

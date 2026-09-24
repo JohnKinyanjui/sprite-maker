@@ -79,7 +79,13 @@ export function shouldHydrateGeneration(
   cardAssets: Asset[],
 ): boolean {
   if (!assistant || assistant.metadata.generation) return false;
+  // An explicit outcome already decided this turn's result, including "nothing published".
+  if (assistant.metadata.generationOutcome || assistant.status !== "completed") return false;
   if (!manifest || manifest.kind === "pack" || !cardAssets.length) return false;
+  // A manifest written before this turn started belongs to an older request.
+  const started = Date.parse(assistant.createdAt);
+  const generated = Date.parse(manifest.generatedAt);
+  if (Number.isFinite(started) && (!Number.isFinite(generated) || generated < started - 5_000)) return false;
   const content = assistant.content.toLowerCase();
   return manifest.files.some(path =>
     content.includes(normalizeManifestPath(path).toLowerCase())

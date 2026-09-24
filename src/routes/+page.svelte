@@ -39,7 +39,7 @@
   import { errorMessage, studioErrorCode, type Animation, type AnimationPolishMode, type AnimationTemplate, type Asset, type AssetPack, type ChatGenerationProfile, type Conversation, type GenerationManifest, type ImageProviderInput, type Message, type ProviderEvent, type ProviderStatus, type ReferenceImage, type Rig, type SidebarSnapshot, type TemplateApplication, type Workspace, type Worktree, type WorktreeKind } from "$lib/types";
   import { hydrateGenerationData, reconcileManifestData } from "$lib/generation-reconcile";
   import {
-    completeChatGeneration, continueAfterMasterProviderPhase, qualityNoticeForAnimation, runNativeRigChatAnimation, startAiPolishHandoff, startChatRequest,
+    completeChatGeneration, continueAfterMasterProviderPhase, qualityNoticeForAnimation, rigGenerationSettings, runNativeRigChatAnimation, startAiPolishHandoff, startChatRequest,
   } from "$lib/chat-generation-run";
   import { normalizeManifestPath } from "$lib/manifest-path";
   import {
@@ -356,7 +356,7 @@
           if(native.completion.handoff.kind==="animation"){
             const {animationId,rigId}=native.completion.handoff;
             const generatedAnimation=animations.find(animation=>animation.id===animationId);
-            if(generatedAnimation){selectedAnimation=generatedAnimation;selectedAsset=undefined;viewedAsset=undefined;activeTab=polishMode==="ai-polish"?"chat":"animate";}
+            if(generatedAnimation){selectedAnimation=generatedAnimation;selectedAsset=undefined;viewedAsset=undefined;}
             if(rigId)selectedRigId=rigId;
           }
         }
@@ -417,6 +417,7 @@
         return;
       }
       const options=buildProviderOptions(profile,command,referenceIds);
+      const animationGeneration=options.generation;
       if(needsNativeRigMasterPhase(prompt,command,animateMaster,conversationAnimationMode)){
         options.nativeRigMasterOnly=true;
         options.generation={...options.generation,frames:1,fps:1,frameMode:"fixed",minFrames:1,maxFrames:1};
@@ -426,6 +427,7 @@
       const started=await startChatRequest({
         conversation,workspaceId:workspace.id,worktree,prompt:outboundPrompt,context,options,knownPackIds:packs.map(pack=>pack.id),
         polishMode,phase:options.nativeRigMasterOnly?"master":undefined,motion,
+        animationGeneration:options.nativeRigMasterOnly?animationGeneration:undefined,
       });
       runningRequests={...runningRequests,[conversation.id]:started.request};
       if(selectedConversation?.id===conversation.id)messages=started.messages;
@@ -443,14 +445,16 @@
     trackConversationActivity(conversationId,["Generation state was out of sync — refreshing the chat"],"warning",{category:"pipeline",eventType:"stale_running_recovered"});
     messages=await api.listMessages(conversationId);
   }
+  /** Live check: long generation awaits must not act on a chat the user has since left. */
+  function viewingConversation(conversationId:string){return selectedConversation?.id===conversationId;}
   async function finalizeChatGeneration(request:ActiveChatRequest,response:string){
     if(!workspace||workspace.id!==request.workspaceId)return;
     const result=await completeChatGeneration(request,response,{assets,packs,rigs,selectedWorktreeId:selectedWorktree?.id,selectedConversationId:selectedConversation?.id,parallelGenerationActive:parallelGenerationsInWorkspace(runningRequests,workspace.id)});
     generationManifest=await api.getGenerationManifest(workspace.id).catch(()=>generationManifest);
     assets=result.assets;packs=result.packs;rigs=result.rigs;if(result.worktreeAssetIds)worktreeAssetIds=result.worktreeAssetIds;if(result.animations)animations=result.animations;
-    const handoff=result.handoff;
-    if(handoff.kind==="animation"){const generatedAnimation=animations.find(animation=>animation.id===handoff.animationId);if(generatedAnimation){selectedAnimation=generatedAnimation;selectedAsset=undefined;viewedAsset=undefined;activeTab="animate";}if(handoff.rigId)selectedRigId=handoff.rigId;if(result.polishWarning)notify(result.polishWarning,"error");const qualityNotice=handoff.animationId?await qualityNoticeForAnimation(handoff.animationId):undefined;if(qualityNotice)notify(qualityNotice,"error");}
-    else if(handoff.kind==="sprite"){selectedAsset=handoff.asset;viewedAsset=undefined;activeTab="sprites";if(handoff.analyzeRig){void api.analyzeRigFit(result.ordered[0].id).then(report=>{const top=report.detections[0];if(top)notify(`Rig check: ${top.morphology} ${Math.round(top.confidence*100)}%${report.warnings.length?" (needs a cleaner master)":""} — open the Rig tab to animate it with points`);}).catch(()=>undefined);}}
+    const handoff=viewingConversation(request.conversationId)?result.handoff:{kind:"none" as const};
+    if(handoff.kind==="animation"){const generatedAnimation=animations.find(animation=>animation.id===handoff.animationId);if(generatedAnimation){selectedAnimation=generatedAnimation;selectedAsset=undefined;viewedAsset=undefined;}if(handoff.rigId)selectedRigId=handoff.rigId;if(result.polishWarning)notify(result.polishWarning,"error");const qualityNotice=handoff.animationId?await qualityNoticeForAnimation(handoff.animationId):undefined;if(qualityNotice)notify(qualityNotice,"error");}
+    else if(handoff.kind==="sprite"){selectedAsset=handoff.asset;viewedAsset=undefined;if(handoff.analyzeRig){void api.analyzeRigFit(result.ordered[0].id).then(report=>{const top=report.detections[0];if(top)notify(`Rig check: ${top.morphology} ${Math.round(top.confidence*100)}%${report.warnings.length?" (needs a cleaner master)":""} — open the Rig tab to animate it with points`);}).catch(()=>undefined);}}
     else if(handoff.kind==="unaccepted"){notify(unacceptedGenerationNotice(handoff.rejectedStaticAnimation),"error");}
   }
   async function reconcileGenerationManifest() {if(!workspace)return;const result=await reconcileManifestData(workspace.id,assets,animations,selectedWorktree?.id,activeWorktreeId(),await currentMotionPlan());if(!result)return;if(result.worktreeAssetIds)worktreeAssetIds=result.worktreeAssetIds;if(result.selectedAnimation)selectedAnimation=result.selectedAnimation;if(result.animations)animations=result.animations;}
@@ -608,6 +612,13 @@
       if(tab){event.preventDefault();activeTab=tab;}
     };
     window.addEventListener("keydown",shortcuts);
+    // Surface render and async failures instead of leaving a view that silently
+    // stops responding.
+    const reportError=(error:unknown)=>{console.error(error);notify(`Something went wrong: ${errorMessage(error)}`,"error");};
+    const onWindowError=(event:ErrorEvent)=>reportError(event.error??event.message);
+    const onRejection=(event:PromiseRejectionEvent)=>reportError(event.reason);
+    window.addEventListener("error",onWindowError);
+    window.addEventListener("unhandledrejection",onRejection);
     const unlistenPromise=listen<ProviderEvent>("provider-event",async({payload})=>{
       const selected=payload.conversationId===selectedConversation?.id;
       if(payload.eventType==="activity"||payload.eventType==="started"){activityByConversation=appendConversationActivity(activityByConversation,payload.conversationId,[payload.content]);}
@@ -626,11 +637,12 @@
               const requestWorktree=request.worktreeId?worktrees.find(item=>item.id===request.worktreeId):selectedWorktree;
               const selected=originatingConversation.id===selectedConversation?.id;
               const style=selected?effectiveStyle:stylePreset(workspaceStyle,customArts);
+              const rigGeneration=rigGenerationSettings(request);
               const masterProfile=selected?generationProfile:{
-                profileVersion:8,quality:request.generation.quality,width:request.generation.width,height:request.generation.height,
-                frames:request.generation.frames,fps:request.generation.fps,frameMode:request.generation.frameMode,
-                minFrames:request.generation.minFrames,maxFrames:request.generation.maxFrames,
-                allowInterpolation:request.generation.allowInterpolation,allowAutoAdjust:request.generation.allowAutoAdjust,
+                profileVersion:8,quality:rigGeneration.quality,width:rigGeneration.width,height:rigGeneration.height,
+                frames:rigGeneration.frames,fps:rigGeneration.fps,frameMode:rigGeneration.frameMode,
+                minFrames:rigGeneration.minFrames,maxFrames:rigGeneration.maxFrames,
+                allowInterpolation:rigGeneration.allowInterpolation,allowAutoAdjust:rigGeneration.allowAutoAdjust,
                 model:"",reasoningEffort:"",imageProviderId:defaultImageProviderId(originatingConversation.provider??defaultProvider),
               };
               const nativeRequestId=`native-rig-${Date.now()}`;
@@ -681,28 +693,28 @@
                   if(continued.completion.worktreeAssetIds)worktreeAssetIds=continued.completion.worktreeAssetIds;
                   if(continued.completion.animations)animations=continued.completion.animations;
                   if(workspace)generationManifest=await api.getGenerationManifest(workspace.id).catch(()=>generationManifest);
-                  if(selected){
+                  if(viewingConversation(payload.conversationId)){
                     messages=continued.messages;
                     if(continued.completion.handoff.kind==="animation"){
                       const {animationId,rigId}=continued.completion.handoff;
                       const generatedAnimation=animations.find(animation=>animation.id===animationId);
-                      if(generatedAnimation){selectedAnimation=generatedAnimation;activeTab=request.polishMode==="ai-polish"?"chat":"animate";}
+                      if(generatedAnimation)selectedAnimation=generatedAnimation;
                       if(rigId)selectedRigId=rigId;
                       const qualityNotice=await qualityNoticeForAnimation(animationId);
                       if(qualityNotice)notify(qualityNotice,"error");
                     }
                   }else{
-                    notify("A background chat finished its native rig animation","notice");
+                    notify("A chat you left finished its native rig animation","notice");
                   }
                 }else if(continued.kind==="handoff-started"){
-                  if(selected){
+                  if(viewingConversation(payload.conversationId)){
                     messages=continued.messages;
                     if(continued.renamed)selectedConversation=continued.renamed;
                     notify(request.polishMode==="full-redraw"?"Rough rig frames rendered — starting full redraw pass":"Rough rig frames rendered — starting AI polish pass");
                   }else{
                     notify("A background chat started its polish pass","notice");
                   }
-                }else if(selected){
+                }else if(viewingConversation(payload.conversationId)){
                   const fallbackMessage=continued.reason==="manifest_not_fresh"
                     ? "Master saved, but Sprite Studio could not verify the new generation manifest yet. Select the master and run /animate again."
                     : "Master saved, but native rig animation could not start automatically. Select the master and run /animate again.";
@@ -727,7 +739,7 @@
         }
       }
     });
-    return()=>{unlistenPromise.then(unlisten=>unlisten());window.removeEventListener("keydown",shortcuts);if(toastTimer)clearTimeout(toastTimer);};
+    return()=>{unlistenPromise.then(unlisten=>unlisten());window.removeEventListener("keydown",shortcuts);window.removeEventListener("error",onWindowError);window.removeEventListener("unhandledrejection",onRejection);if(toastTimer)clearTimeout(toastTimer);};
   });
 </script>
 

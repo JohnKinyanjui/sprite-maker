@@ -7,6 +7,8 @@ mod ik;
 mod mesh;
 mod mirror;
 mod object_templates;
+mod parts;
+mod parts_render;
 mod render;
 mod skin;
 mod suggest;
@@ -70,6 +72,8 @@ pub(crate) use interpolate::{
 };
 #[allow(unused_imports)]
 pub(crate) use skin::render_frames;
+pub(crate) use parts::assemble_fresh_parts;
+pub(crate) use parts_render::render_master_frames;
 #[allow(unused_imports)]
 pub(crate) use suggest::{distance_transform, suggest_points};
 #[allow(unused_imports)]
@@ -90,5 +94,7 @@ mod mirror_tests;
 mod deform_tests;
 #[cfg(test)]
 mod ik_tests;
+#[cfg(test)]
+mod parts_tests;
 #[cfg(test)]
 mod tests;

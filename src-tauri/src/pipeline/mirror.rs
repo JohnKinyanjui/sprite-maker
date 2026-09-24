@@ -6,7 +6,7 @@ use crate::{
         AnimationDirectionMeta, AnimationFrame, AnimationInput, MirrorAnimationInput,
         MirrorAnimationResult, NormalizeAnimationInput,
     },
-    rig::{mirror_rig_frames, render_frames, resolve_rig_for_animation},
+    rig::{mirror_rig_frames, render_master_frames, resolve_rig_for_animation},
     workspace::workspace_path,
     AppState,
 };
@@ -197,7 +197,7 @@ pub(crate) fn mirror_animation_inner(
         let mut render_rig = rig.clone();
         render_rig.frames =
             mirror_rig_frames(&render_rig, mirror_axis, canvas_width, canvas_height);
-        let rendered = render_frames(&master_image, &render_rig);
+        let rendered = render_master_frames(std::path::Path::new(&master.path), &master_image, &render_rig);
         for (index, (frame, image)) in frames.iter().zip(rendered.iter()).enumerate() {
             let file_name = format!("frame-{:02}.png", index + 1);
             let output_path = output_directory.join(&file_name);

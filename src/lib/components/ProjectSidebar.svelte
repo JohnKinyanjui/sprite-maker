@@ -10,6 +10,7 @@
     FolderOpen,
     GalleryThumbnails,
     LoaderCircle,
+    MessageCircle,
     MessageCirclePlus,
     Paintbrush,
     PenLine,
@@ -47,7 +48,11 @@
   });
   function chatsFor(worktree:Worktree){return conversations.filter(item=>item.worktreeId===worktree.id);}
   async function rename(title:string){if(!renameTarget)return;renaming=true;try{await onRenameConversation(renameTarget,title);renameTarget=undefined;}finally{renaming=false;}}
+  // Away from the chat, the chat item returns to the open conversation; only
+  // inside the chat does it start a new one (⌘N always starts a new one).
+  const backToChat=$derived(activeView!=="chat"&&Boolean(selectedConversationId));
   function newChat(){onView("chat");onNewConversation();}
+  function chatItem(){if(backToChat){onView("chat");return;}newChat();}
   async function openArchive(){archiveOpen=true;loadingArchive=true;try{archivedConversations=await onListArchivedConversations();}finally{loadingArchive=false;}}
   async function restoreArchived(conversation:Conversation){restoringId=conversation.id;try{await onRestoreConversation(conversation);archivedConversations=archivedConversations.filter(item=>item.id!==conversation.id);if(!archivedConversations.length)archiveOpen=false;}finally{restoringId=undefined;}}
   async function deleteArchived(conversation:Conversation){deletingId=conversation.id;try{await onDeleteConversation(conversation);archivedConversations=archivedConversations.filter(item=>item.id!==conversation.id);if(!archivedConversations.length)archiveOpen=false;}finally{deletingId=undefined;}}
@@ -56,7 +61,7 @@
 <aside class="sidebar">
   <div class="brand"><div class="pixel"><LogoMark size={18} /></div><div><strong>Sprite Studio</strong><small>AI sprite creation</small></div></div>
   <nav class="primary" aria-label="Main navigation">
-    {#each primary as item}<button class:active={activeView===item.id} onclick={()=>item.id==="chat"?newChat():onView(item.id)}><item.icon size={15}/><span>{item.label}</span>{#if item.id==="chat"}<kbd>⌘N</kbd>{/if}</button>{/each}
+    {#each primary as item}<button class:active={activeView===item.id} onclick={()=>item.id==="chat"?chatItem():onView(item.id)}>{#if item.id==="chat"&&backToChat}<MessageCircle size={15}/><span>Back to chat</span>{:else}<item.icon size={15}/><span>{item.label}</span>{#if item.id==="chat"}<kbd>⌘N</kbd>{/if}{/if}</button>{/each}
   </nav>
   <div class="divider"></div>
   <div class="projects-head"><span>Projects</span><button onclick={onAddProject} title="Add project" aria-label="Add project"><Plus size={14}/></button></div>

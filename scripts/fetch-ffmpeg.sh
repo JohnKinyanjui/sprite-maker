@@ -73,9 +73,30 @@ fetch_macos_evermeet_arm64() {
   fetch_macos_evermeet aarch64
 }
 
-if [[ "$universal_macos" -eq 1 ]]; then
+# Tauri universal builds look for one `-universal-apple-darwin` sidecar.
+# Merge the two downloads with lipo; when both are the same architecture
+# (the download may be Intel-only), reuse it as-is.
+fetch_macos_universal() {
   fetch_macos_evermeet_arm64
   fetch_macos_evermeet_x86
+  local arm="$BIN_DIR/ffmpeg-aarch64-apple-darwin"
+  local intel="$BIN_DIR/ffmpeg-x86_64-apple-darwin"
+  local dest="$BIN_DIR/ffmpeg-universal-apple-darwin"
+  if [[ -f "$dest" ]]; then
+    echo "ffmpeg already present at $dest"
+    return 0
+  fi
+  if [[ "$(lipo -archs "$arm")" != "$(lipo -archs "$intel")" ]]; then
+    lipo -create -output "$dest" "$arm" "$intel"
+  else
+    cp "$arm" "$dest"
+  fi
+  chmod +x "$dest"
+  echo "Installed universal bundled ffmpeg to $dest ($(lipo -archs "$dest"))"
+}
+
+if [[ "$universal_macos" -eq 1 ]]; then
+  fetch_macos_universal
   exit 0
 fi
 

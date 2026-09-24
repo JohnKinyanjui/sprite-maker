@@ -103,6 +103,21 @@ fn accepted_process_with_rejected_generation_is_a_failure() {
 }
 
 #[test]
+fn withheld_result_without_marker_is_a_failure() {
+    // Reproduced: the agent could not open a browser preview and withheld the
+    // run cycle without `GENERATION_FAILED:`; the turn must not read as done.
+    assert!(response_reports_generation_failure(
+        "Generated the running man master, draft rig, and 8 frames, but the three-cycle playback approval was denied, so I marked the generated result unpublished."
+    ));
+    assert!(response_reports_generation_failure(
+        "The new frames were not published."
+    ));
+    assert!(!response_reports_generation_failure(
+        "Published running_man_run with 8 frames. GENERATION_WARNING: a one-pixel knee seam remains."
+    ));
+}
+
+#[test]
 fn parses_claude_partial_text_and_session() {
     let line =
         r#"{"type":"stream_event","session_id":"session-1","event":{"delta":{"text":"hello"}}}"#;

@@ -13,7 +13,7 @@ fn edge(a: (f64, f64), b: (f64, f64), point: (f64, f64)) -> f64 {
     (point.0 - a.0) * (b.1 - a.1) - (point.1 - a.1) * (b.0 - a.0)
 }
 
-fn blend_rgba(existing: Rgba<u8>, incoming: Rgba<u8>) -> Rgba<u8> {
+pub(super) fn blend_rgba(existing: Rgba<u8>, incoming: Rgba<u8>) -> Rgba<u8> {
     let source_alpha = incoming[3] as f32 / 255.0;
     if source_alpha <= 0.0 {
         return existing;
@@ -130,20 +130,12 @@ fn render_deform_mesh(
     canvas
 }
 
-pub(super) fn render_frame_with_mesh(
-    master: &RgbaImage,
+/// Per-bone transforms for one frame, with contact IK folded into rotations.
+pub(super) fn resolve_frame_transforms(
     rig: &Rig,
     frame: &RigFrame,
-    ownership: &[i16],
     positions: &HashMap<String, (f64, f64)>,
-    mesh: Option<&DeformMesh>,
-) -> RgbaImage {
-    let width = master.width();
-    let height = master.height();
-    let mut canvas = RgbaImage::new(width, height);
-    if rig.bones.is_empty() {
-        return master.clone();
-    }
+) -> HashMap<String, RigTransform> {
     let mut transforms: HashMap<String, RigTransform> = HashMap::new();
     for transform in &frame.transforms {
         if rig.bones.iter().any(|bone| bone.name == transform.bone) {
@@ -168,6 +160,24 @@ pub(super) fn render_frame_with_mesh(
             .or_insert_with_key(|name| identity_transform(name))
             .rotate += child_delta;
     }
+    transforms
+}
+
+pub(super) fn render_frame_with_mesh(
+    master: &RgbaImage,
+    rig: &Rig,
+    frame: &RigFrame,
+    ownership: &[i16],
+    positions: &HashMap<String, (f64, f64)>,
+    mesh: Option<&DeformMesh>,
+) -> RgbaImage {
+    let width = master.width();
+    let height = master.height();
+    let mut canvas = RgbaImage::new(width, height);
+    if rig.bones.is_empty() {
+        return master.clone();
+    }
+    let transforms = resolve_frame_transforms(rig, frame, positions);
     let mut order: Vec<usize> = (0..rig.bones.len()).collect();
     order.sort_by_key(|index| (rig.bones[*index].z, *index));
     let bounds = owned_bounds(ownership, rig.bones.len(), master.width() as usize);

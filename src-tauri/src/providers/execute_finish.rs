@@ -1,3 +1,4 @@
+use super::budget_finalize::BudgetFinalization;
 use super::stream::{
     emit, provider_display_name, provider_failure_message, response_reports_generation_failure,
     with_optional_auth_hint,
@@ -20,6 +21,8 @@ pub(crate) struct FinishProviderRun<'a> {
     pub cancelled: bool,
     pub status: Result<std::process::ExitStatus, std::io::Error>,
     pub stderr_output: &'a str,
+    /// Set when the runtime stopped the provider for a spent repair budget.
+    pub budget_finalization: Option<BudgetFinalization>,
 }
 
 pub(crate) fn finish_provider_run(args: FinishProviderRun<'_>) {
@@ -35,6 +38,7 @@ pub(crate) fn finish_provider_run(args: FinishProviderRun<'_>) {
         cancelled,
         status,
         stderr_output,
+        budget_finalization,
     } = args;
     if cancelled {
         let message = if response.is_empty() {
@@ -51,6 +55,18 @@ pub(crate) fn finish_provider_run(args: FinishProviderRun<'_>) {
             "cancelled",
             "Request cancelled",
         );
+        return;
+    }
+    if let Some(finalization) = budget_finalization {
+        // The provider was stopped on purpose, so its exit status and partial
+        // narration are irrelevant; the runtime's own outcome is the result.
+        let (message_status, event) = if finalization.published {
+            ("completed", "completed")
+        } else {
+            ("failed", "failed")
+        };
+        let _ = update_message(state, assistant_id, &finalization.response, message_status);
+        emit(app, state, request_id, conversation_id, event, finalization.response);
         return;
     }
     match status {

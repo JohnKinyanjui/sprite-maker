@@ -5,7 +5,7 @@ use crate::{
 };
 
 use super::routing::{
-    asset_identity_context, explicit_count, explicit_size, has_explicit_asset_subject, infer_brief,
+    asset_identity_context, explicit_count, explicit_size, has_explicit_asset_subject, has_word, infer_brief,
     inferred_style, HarnessKind,
 };
 
@@ -95,6 +95,154 @@ MORPHOLOGY HINT: {morphology} (biped | quadruped | winged | serpentine | object 
     )
 }
 
+/// Pose-only prompt for a rig whose skeleton is exact (assembled from parts).
+/// The provider plans motion; it cannot move joints or re-segment pixels.
+pub fn rig_frames_prompt(
+    motion: &str,
+    width: u32,
+    height: u32,
+    points: &[crate::rig::RigPoint],
+    bones: &[crate::rig::RigBone],
+) -> String {
+    let point_lines = points
+        .iter()
+        .map(|point| format!("- {} ({}): x {:.1}, y {:.1}", point.name, point.kind, point.x, point.y))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let bone_lines = bones
+        .iter()
+        .map(|bone| {
+            format!(
+                "- {}: {} → {}, parent {}, z {}",
+                bone.name,
+                bone.start_point,
+                bone.end_point,
+                bone.parent.as_deref().unwrap_or("none"),
+                bone.z
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let ground = points
+        .iter()
+        .filter(|point| point.kind == "contact")
+        .map(|point| point.y)
+        .fold(0.0_f64, f64::max);
+    let motion_text = if motion.trim().is_empty() { "idle breathing loop" } else { motion.trim() };
+    format!(
+        "RIG POSE ANIMATOR CONTRACT\n\
+You animate a character whose skeleton is already exact: it was assembled from separate body-part images, and Sprite Studio moves each whole part rigidly. Do not propose points or bones; answer only pose frames.\n\n\
+Answer with exactly ONE fenced code block tagged `rig-suggestion`:\n\n\
+```rig-suggestion\n\
+{{\n\
+  \"frames\": [\n\
+    {{\"phase\": \"right_contact\", \"rootDx\": 0, \"rootDy\": 0,\n\
+      \"transforms\": [{{\"bone\": \"thigh_r\", \"rotate\": -35}}, {{\"bone\": \"shin_r\", \"rotate\": 10}}],\n\
+      \"contacts\": []}}\n\
+  ],\n\
+  \"reasoning\": \"one short paragraph\"\n\
+}}\n\
+```\n\n\
+REST POSE (every rotation is relative to this)\n\
+The figure faces RIGHT (+x). The torso is upright, the head sits on the neck, and both arms and both legs hang straight down. Suffix `_r` is the NEAR limb (drawn in front), `_l` the FAR limb (drawn behind). Canvas {width}×{height}, +y down, ground line y ≈ {ground:.1}.\n\
+Points:\n{point_lines}\n\
+Bones (child rotations add to the parent's):\n{bone_lines}\n\n\
+ROTATION SIGNS (degrees, positive = clockwise on screen)\n\
+- Swinging a thigh or upper arm FORWARD (toward +x) is NEGATIVE; swinging it BACK is POSITIVE.\n\
+- A bending knee folds the foot backward: shin rotation is POSITIVE relative to its thigh (typically 10–110). Never bend a knee forward.\n\
+- A bending elbow folds the forearm forward: lower-arm rotation is NEGATIVE relative to its upper arm (typically −20 to −100).\n\
+- The torso pivots at the neck: leaning forward (hips trailing) is POSITIVE. Keep it within 0–15 and carry weight with a small `rootDy` bob instead.\n\n\
+RULES\n\
+- Plan a seamless loop. Runs and walks use 8 frames: contact, down, passing, up for the near leg, then the same four for the far leg, with arms swinging opposite to the legs.\n\
+- Every frame lists transforms for all ten bones. Keep legs out of the ground: the lowest foot stays on the ground line in contact frames and rises in flight frames, using `rootDy` (negative = up) for the body bob.\n\
+- Motion must read at pixel scale: thighs swing at least 25° either side for a run, 15° for a walk.\n\
+- `contacts` are optional; use them only to pin a planted foot to the ground line (bone `shin_r` or `shin_l`, x/y in canvas pixels).\n\
+- After the block write at most two sentences. Nothing before the block.\n\n\
+MOTION INTENT\n{motion_text}"
+    )
+}
+
+/// Explicit user wording owns routing. For deictic requests such as
+/// "animate this", only the selected/focused asset identity is a valid
+/// fallback; legacy worktree labels and style prose remain irrelevant.
+fn routing_prompt(prompt: &str, context: &str) -> String {
+    let asset_identity = asset_identity_context(context);
+    if !has_explicit_asset_subject(prompt) && !asset_identity.is_empty() {
+        format!("{prompt}\n{asset_identity}")
+    } else {
+        prompt.to_string()
+    }
+}
+
+/// The asset category `studio_prompt` routes this request to.
+pub fn routed_category(prompt: &str, context: &str, command: Option<&str>) -> &'static str {
+    match command {
+        Some("character") => "characters",
+        Some("effect") => "effects",
+        _ => infer_brief(&routing_prompt(prompt.trim(), context.trim())).category,
+    }
+}
+
+/// Canvas for a master-only character request that should arrive as a parts
+/// sheet; `None` when the single-master contract applies.
+pub fn parts_master_canvas(
+    prompt: &str,
+    context: &str,
+    generation: Option<&GenerationOptions>,
+    command: Option<&str>,
+    native_rig_master_only: bool,
+) -> Option<(u32, u32)> {
+    if !native_rig_master_only || command.is_some_and(|value| value != "character") {
+        return None;
+    }
+    let routed = routing_prompt(prompt.trim(), context.trim());
+    let brief = infer_brief(&routed);
+    // Unknown subjects also route to characters, so require a humanoid word:
+    // a missed humanoid keeps the single master, but a butterfly or dragon
+    // must never be forced into a biped parts sheet.
+    if command != Some("character")
+        && !(brief.harness == HarnessKind::Character && humanoid_subject(&routed))
+    {
+        return None;
+    }
+    Some(
+        generation
+            .map(|options| (options.width, options.height))
+            .filter(|(width, height)| *width >= 32 && *height >= 32)
+            .unwrap_or((brief.width.max(64), brief.height.max(64))),
+    )
+}
+
+fn humanoid_subject(prompt: &str) -> bool {
+    const HUMANOID: &[&str] = &[
+        "man", "men", "woman", "women", "boy", "girl", "guy", "lady", "person", "people", "human",
+        "kid", "child", "runner", "character", "hero", "heroine", "npc", "villager", "adventurer",
+        "knight", "warrior", "soldier", "guard", "wizard", "mage", "witch", "sorcerer", "ninja",
+        "samurai", "archer", "rogue", "thief", "pirate", "king", "queen", "prince", "princess",
+        "farmer", "herbalist", "merchant", "chef", "doctor", "athlete", "fighter", "monk",
+        "priest", "paladin", "cowboy", "zombie", "skeleton", "robot", "android", "elf", "dwarf",
+        "orc", "goblin", "vampire", "courier",
+    ];
+    HUMANOID.iter().any(|word| has_word(&prompt.to_ascii_lowercase(), word))
+}
+
+fn parts_handoff_contract((width, height): (u32, u32)) -> String {
+    let figure = (height as f64 * 0.8).round() as u32;
+    format!(
+        "DELIVERABLE: separate body parts per the PARTS HANDOFF CONTRACT below. Everything after that contract describes the single-master fallback, used only when clean parts are impossible.\n\n\
+PARTS HANDOFF CONTRACT (humanoid characters)\n\
+Sprite Studio animates humanoids by moving separate body parts, so near and far limbs never merge or tear. Deliver parts instead of a finished pose:\n\
+- Use ImageGen once to draw ONE parts sheet for an original right-facing side-view character: every body part drawn separately with clear gaps, all at one consistent scale, on a plain removable background, with no text, labels, or guides. Parts: head (with a short neck stub); torso from neck to hips with no arms or legs attached; and for BOTH the near (viewer-side) and the far side: upper arm, forearm with hand, thigh, shin with foot. Far-side parts are slightly darker.\n\
+- Draw every limb hanging straight down with the end nearest the body at the top, and give every joint end (shoulder, elbow, hip, knee) a rounded cap that overlaps its neighbour, so parts stay joined when they rotate.\n\
+- Key out the background, cut each part out, and scale ALL parts by the same factor so the standing figure (head to feet) is about {figure} pixels tall for a {width}×{height} canvas: head about one fifth of the height, legs about half. Finish as clean pixel art with hard edges and no halo.\n\
+- Save to `.sprite-studio/parts/<slug>/`: `head.png`, `torso.png`, `upper_arm_near.png`, `forearm_near.png`, `thigh_near.png`, `shin_near.png`, `upper_arm_far.png`, `forearm_far.png`, `thigh_far.png`, `shin_far.png`, and `parts.json`:\n\
+  {{\"kind\": \"biped-parts\", \"name\": \"<slug>\", \"facing\": \"right\", \"canvas\": [{width}, {height}], \"parts\": {{\"head\": {{\"file\": \"head.png\"}}, \"torso\": {{\"file\": \"torso.png\"}}, ...}}}}\n\
+  Joints are optional. Add `\"joints\": {{\"elbow\": [x, y]}}` in that part's own pixel coordinates only where the default is wrong. Defaults: each limb joint is centred at its top or bottom end, one cap radius inside; the torso neck is at its top centre, shoulder 18% down, hip at the bottom centre; the head neck is at its bottom centre; the shin `foot` is the centre of the sole. Joint names: torso `neck`/`shoulder`/`hip`, head `neck`/`top`, upper arm `shoulder`/`elbow`, forearm `elbow`/`hand`, thigh `hip`/`knee`, shin `knee`/`foot`.\n\
+- Do not write files under `assets/` and do not write `.sprite-studio/last-generation.json`. Sprite Studio assembles the parts into `assets/characters/<slug>.png`, writes the manifest, and builds the exact rig itself. Reply in one or two sentences naming `assets/characters/<slug>.png` as the master Sprite Studio assembles from your parts; never call it unpublished, pending, or not published.\n\
+- Fallback: only if you cannot produce clean separate parts, follow the MASTER HANDOFF CONTRACT below instead.\n\n"
+    )
+}
+
 pub fn studio_prompt(
     prompt: &str,
     context: Option<&str>,
@@ -106,9 +254,12 @@ pub fn studio_prompt(
 ) -> String {
     let context = context.unwrap_or("").trim();
     if native_rig_master_only {
+        let parts_contract = parts_master_canvas(prompt, context, generation, command, true)
+            .map(parts_handoff_contract)
+            .unwrap_or_default();
         return apply_native_image_contract(
             format!(
-                "You are the creation agent inside Sprite Studio. Create exactly ONE transparent motion-ready source master for a later native rig animation. Sprite Studio will suggest joint points, save the rig, and render frames locally after this master is saved. Do not write mask rigs, pose sheets, animation frames, or call `.sprite-studio/sprite_rig.py`.\n\nMASTER HANDOFF CONTRACT\n- Source and keyed intermediates may be kept under `.sprite-studio/imagegen-sources/<slug>/`, but they are not the deliverable.\n- Save or copy the single accepted transparent master to `assets/characters/<slug>.png`. Do not create any other asset file.\n- After the final master exists, write a fresh `.sprite-studio/last-generation.json` containing `kind: \"sprite\"`, the chosen `name`, `category: \"characters\"`, `fps: 1`, `files: [\"assets/characters/<slug>.png\"]`, `source: \"assets/characters/<slug>.png\"`, and a current ISO-8601 `generatedAt` timestamp.\n- The manifest and its listed asset must be newly written for this request. Never reuse or restore an older manifest.\n- Mention the final `assets/characters/<slug>.png` path in the response. Do not report success unless both that asset and the fresh manifest exist.\n\nSELECTED CHAT CONTEXT\n{}\n\nROUTED HARNESS\n{}\n\nSTYLE PRESETS\n{}\n\nQUALITY GATES\n{}\n\nUSER REQUEST\n{}",
+                "{parts_contract}You are the creation agent inside Sprite Studio. Create exactly ONE transparent motion-ready source master for a later native rig animation. Sprite Studio will suggest joint points, save the rig, and render frames locally after this master is saved. Do not write mask rigs, pose sheets, animation frames, or call `.sprite-studio/sprite_rig.py`.\n\nMASTER HANDOFF CONTRACT\n- Source and keyed intermediates may be kept under `.sprite-studio/imagegen-sources/<slug>/`, but they are not the deliverable.\n- Save or copy the single accepted transparent master to `assets/characters/<slug>.png`. Do not create any other asset file.\n- After the final master exists, write a fresh `.sprite-studio/last-generation.json` containing `kind: \"sprite\"`, the chosen `name`, `category: \"characters\"`, `fps: 1`, `files: [\"assets/characters/<slug>.png\"]`, `source: \"assets/characters/<slug>.png\"`, and a current ISO-8601 `generatedAt` timestamp.\n- The manifest and its listed asset must be newly written for this request. Never reuse or restore an older manifest.\n- Mention the final `assets/characters/<slug>.png` path in the response. Do not report success unless both that asset and the fresh manifest exist.\n\nSELECTED CHAT CONTEXT\n{}\n\nROUTED HARNESS\n{}\n\nSTYLE PRESETS\n{}\n\nQUALITY GATES\n{}\n\nUSER REQUEST\n{}",
                 if context.is_empty() { "No saved style override." } else { context },
                 CHARACTER_HARNESS,
                 STYLE_PRESETS,
@@ -146,16 +297,7 @@ pub fn studio_prompt(
             agent_provider,
         );
     }
-    // Explicit user wording owns routing. For deictic requests such as
-    // "animate this", only the selected/focused asset identity is a valid
-    // fallback; legacy worktree labels and style prose remain irrelevant.
-    let asset_identity = asset_identity_context(context);
-    let routing_prompt = if !has_explicit_asset_subject(prompt) && !asset_identity.is_empty() {
-        format!("{prompt}\n{asset_identity}")
-    } else {
-        prompt.to_string()
-    };
-    let mut brief = infer_brief(&routing_prompt);
+    let mut brief = infer_brief(&routing_prompt(prompt, context));
     // Saved style context may supply character proportions, but it is never
     // allowed to reroute the requested asset or replace explicit user style.
     if brief.harness != HarnessKind::Tileset && inferred_style(prompt).is_none() {
@@ -318,7 +460,7 @@ pub fn studio_prompt(
     };
     apply_native_image_contract(
         format!(
-        "You are the creation agent inside Sprite Studio. Obey the routed harness. Explicit subject words in the current USER REQUEST and an explicit slash command own routing. When the request says only `this`, `it`, or `selected`, the selected/focused asset filename may identify the subject; its legacy folder, worktree label, project-section name, description, reference category, and style prose must never override the subject. All router, harness, preset, quality-gate, and internal-review text you need is embedded in this prompt; do not search the workspace for `references/*.md` files. ImageGen may create one source master. Animation timing and poses come from a saved deterministic rig, never from independently invented AI frames. Render rig-only animations with Sprite Studio's native rig engine or `.sprite-studio/sprite_rig.py`. Use ImageGen on animation frames only when the user explicitly selected AI polish or experimental full redraw, and only after rough rig frames exist as pose authority. Pose sheets remain forbidden. Preserve every unrelated workspace asset: never move, delete, rename, or overwrite existing assets unless the user explicitly asked to modify that exact asset. The routed asset category is a hard contract: the rig category, output folder, generation manifest category, scanned assets, and final response must all match the routed category below. Never reuse an older rig or source because its filename or appearance is similar; provenance must trace to the exact focused reference. Before reporting success, run the silent internal acceptance loop, validate the saved rig and `.sprite-studio/last-generation.json`, preview at least three cycles, and run native quality analysis. Visual imperfections must degrade gracefully: after one repair attempt, publish the best structurally valid candidate and simplify motion when needed, ending with `GENERATION_WARNING: <concise limitation>`. An explicit animation request requires at least two distinct frames; never call a one-frame fallback an animation. Use `GENERATION_FAILED` only when no valid workspace-confined result of the requested kind can be produced at all. Never restore an old manifest as new output. Keep the user-facing reply to the result and any warning in at most three short sentences; never narrate the internal review or retry process.\n\n\
+        "You are the creation agent inside Sprite Studio. Obey the routed harness. Explicit subject words in the current USER REQUEST and an explicit slash command own routing. When the request says only `this`, `it`, or `selected`, the selected/focused asset filename may identify the subject; its legacy folder, worktree label, project-section name, description, reference category, and style prose must never override the subject. All router, harness, preset, quality-gate, and internal-review text you need is embedded in this prompt; do not search the workspace for `references/*.md` files. ImageGen may create one source master. Animation timing and poses come from a saved deterministic rig, never from independently invented AI frames. Render rig-only animations with Sprite Studio's native rig engine or `.sprite-studio/sprite_rig.py`. When the MCP rig tools (`save_rig`, `analyze_rig_fit`, `render_rig_animation`, `sprite_rig_*`) are not available in this session, the harness steps that name them mean `.sprite-studio/sprite_rig.py --check RIG.json` for validation and `.sprite-studio/sprite_rig.py RIG.json` for rendering; missing MCP tools are never a reason to fail. Use ImageGen on animation frames only when the user explicitly selected AI polish or experimental full redraw, and only after rough rig frames exist as pose authority. Pose sheets remain forbidden. Preserve every unrelated workspace asset: never move, delete, rename, or overwrite existing assets unless the user explicitly asked to modify that exact asset. The routed asset category is a hard contract: the rig category, output folder, generation manifest category, scanned assets, and final response must all match the routed category below. Never reuse an older rig or source because its filename or appearance is similar; provenance must trace to the exact focused reference. Before reporting success, run the silent internal acceptance loop, validate the saved rig and `.sprite-studio/last-generation.json`, and validate the loop headlessly with the strict rig validator and a contact-sheet inspection; Sprite Studio runs native quality analysis itself after registration. Validation never requires a browser: do not open Chrome or any browser, local HTML/GIF preview, dev server, or `open`/`xdg-open`/`start` command, and never request computer-use or interactive approval to watch playback. If a tool or permission is denied, continue with the headless checks instead of retrying or withholding the result. Respect the repair budget: at most three rig validate→fix cycles, one post-render repair rerender, and no pixel-by-pixel seam iteration. Sprite Studio enforces this budget at runtime: a fourth pre-render validation or a second repair rerender stops this run, and Sprite Studio then publishes the latest structurally valid rig render itself with a warning. Visual imperfections must degrade gracefully: once the budget is spent, publish the best structurally valid candidate and simplify motion when needed, ending with `GENERATION_WARNING: <concise limitation>`. An explicit animation request requires at least two distinct frames; never call a one-frame fallback an animation. Use `GENERATION_FAILED: <reason>` only when no valid workspace-confined result of the requested kind can be produced at all, and always begin the reply with it when you withhold a result. Never restore an old manifest or cite an older asset as new output. Keep the user-facing reply to the result and any warning in at most three short sentences; never narrate the internal review or retry process.\n\n\
          DETERMINISTIC HARNESS BRIEF\n\
          - routed harness: {}\n\
          - asset category: {}\n\

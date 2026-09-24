@@ -4,7 +4,7 @@
   import { api, assetUrl } from "$lib/api";
   import SpriteArtifactCard from "$lib/components/SpriteArtifactCard.svelte";
   import PackArtifactCard from "$lib/components/PackArtifactCard.svelte";
-  import { contentWithoutSpriteOutputLinks, inferMessageGeneration, inferMessagePack, reportsGenerationFailure, reportsGenerationWarning } from "$lib/message-generations";
+  import { contentWithoutSpriteOutputLinks, generationOutcomeOf, inferMessageGeneration, inferMessagePack, reportsGenerationFailure, reportsGenerationWarning } from "$lib/message-generations";
   import ActiveSkillsIndicator from "$lib/components/ActiveSkillsIndicator.svelte";
   import ChatSettingsMenu from "$lib/components/ChatSettingsMenu.svelte";
   import MarkdownMessage from "$lib/components/MarkdownMessage.svelte";
@@ -237,7 +237,9 @@
         {#each messages as message}
           {@const packResult = inferMessagePack(message,packs)}
           {@const generation = packResult ? undefined : generationFor(message)}
-          {@const generationFailed = message.role === "assistant" && reportsGenerationFailure(message.content)}
+          {@const outcomeStatus = message.role === "assistant" ? generationOutcomeOf(message)?.status : undefined}
+          {@const generationFailed = message.role === "assistant" && (reportsGenerationFailure(message.content) || outcomeStatus === "failed")}
+          {@const generationUnpublished = outcomeStatus === "unpublished"}
           {@const generationWarning = message.role === "assistant" && reportsGenerationWarning(message.content)}
           <article class:user={message.role === "user"} class:failed={message.status === "failed" || generationFailed}>
             <div class="avatar">{#if message.role === "user"}<span>You</span>{:else}<span class={`provider-mark compact ${provider?.id ?? ""}`}><ProviderLogo providerId={provider?.id ?? "agent"} label={provider?.name} size={14}/></span>{/if}</div>
@@ -251,6 +253,7 @@
                 {#if activity.length}<div class="activity">{#each activity.slice(-5) as entry}<div class={entry.level}><Terminal size={12} /><span>{entry.text}</span></div>{/each}</div>{/if}
               {:else if message.status === "failed" || generationFailed}<div class="message-state"><AlertTriangle size={12} /> Failed</div>
               {:else if message.status === "cancelled"}<div class="message-state"><X size={12} /> Cancelled</div>
+              {:else if generationUnpublished}<div class="message-state"><AlertTriangle size={12} /> No new asset published</div>
               {:else if generationWarning}<div class="message-state"><AlertTriangle size={12} /> Completed with warning</div>
               {:else if message.role === "assistant"}<div class="message-state subtle"><Check size={11} /> Completed</div>{/if}
             </div>

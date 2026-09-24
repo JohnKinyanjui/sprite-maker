@@ -12,7 +12,7 @@ If no finishing mode is stated, use **Rig only**. Never silently spend image-pro
 
 1. Approve or create one transparent source master.
 2. Build, save, and validate a deterministic rig tied to that exact source.
-3. Render the complete rough animation from the rig and preview at least three cycles.
+3. Render the complete rough animation from the rig and validate the cycle headlessly (rig validator plus contact-sheet inspection; never a browser preview).
 4. If and only if the user selected AI polish or Full redraw, process frames in playback order with the corresponding rough frame as the strongest reference.
 5. Preserve frame count, timing, contact states, limb identity, pivot, and final-to-first continuity.
 6. Normalize every accepted result with the same crop, scale, anchor, palette, alpha, and padding treatment before it enters `assets/`.

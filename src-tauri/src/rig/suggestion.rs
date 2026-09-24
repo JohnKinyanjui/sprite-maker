@@ -17,6 +17,60 @@ pub fn parse_rig_suggestion_text(text: &str, width: u32, height: u32) -> Option<
     None
 }
 
+/// Parse pose frames for a fixed skeleton (a parts rig). The provider only
+/// answers `frames`; the exact points and bones are injected before the usual
+/// normalization, so frames can only reference real bones, and the skeleton
+/// itself is returned untouched.
+pub(crate) fn parse_frames_for_skeleton(
+    text: &str,
+    width: u32,
+    height: u32,
+    skeleton: RigSuggestion,
+) -> Option<RigSuggestion> {
+    let mut candidates = extract_fenced_blocks(text, "rig-suggestion");
+    candidates.extend(extract_fenced_blocks(text, "json"));
+    let points = serde_json::to_value(
+        skeleton
+            .points
+            .iter()
+            .map(|point| serde_json::json!({"name": point.name, "kind": point.kind, "x": point.x, "y": point.y}))
+            .collect::<Vec<_>>(),
+    )
+    .ok()?;
+    let bones = serde_json::to_value(
+        skeleton
+            .bones
+            .iter()
+            .map(|bone| serde_json::json!({"name": bone.name, "start": bone.start_point, "end": bone.end_point, "radius": bone.radius, "parent": bone.parent, "z": bone.z}))
+            .collect::<Vec<_>>(),
+    )
+    .ok()?;
+    for json_text in candidates.iter().rev() {
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json_text) else {
+            continue;
+        };
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        object.insert("points".into(), points.clone());
+        object.insert("bones".into(), bones.clone());
+        object.insert("morphology".into(), serde_json::Value::String(skeleton.morphology.clone()));
+        let Some(parsed) = normalize_suggestion(value, width, height, "ai") else {
+            continue;
+        };
+        if parsed.frames.len() < 2 {
+            continue;
+        }
+        return Some(RigSuggestion {
+            frames: parsed.frames,
+            reasoning: parsed.reasoning,
+            source: "ai".to_string(),
+            ..skeleton
+        });
+    }
+    None
+}
+
 fn extract_fenced_blocks(text: &str, tag: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut remaining = text;

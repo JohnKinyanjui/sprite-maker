@@ -7,6 +7,8 @@ import type {
   AssetPack,
   ChatGenerationProfile,
   GenerationManifest,
+  GenerationOutcomeMetadata,
+  GenerationOutcomeStatus,
   Message,
   PackGenerationMetadata,
   ProviderRequestOptions,
@@ -27,11 +29,19 @@ import { normalizeManifestPath } from "$lib/manifest-path";
 export type ActiveChatRequest = {
   id: string;
   conversationId: string;
+  /** Assistant message created for this request; result cards attach only here. */
+  assistantMessageId?: string;
   workspaceId: string;
   worktreeId?: string;
   prompt: string;
   command?: SpriteSlashCommand;
   generation: ProviderRequestOptions["generation"];
+  /**
+   * The user's animation settings for a master-only phase, whose own
+   * `generation` is overridden to one fixed frame. The native rig step must
+   * plan from these, never from the single-frame master settings.
+   */
+  animationGeneration?: ProviderRequestOptions["generation"];
   knownPackIds: string[];
   previousGenerationFingerprint?: string;
   startedAt: number;
@@ -261,12 +271,47 @@ export function mergeAssistantGenerationMetadata(
   input: {
     generation?: ReturnType<typeof spriteCardForOrderedAssets>;
     packGeneration?: PackGenerationMetadata;
+    outcome?: GenerationOutcomeMetadata;
   },
 ): Record<string, unknown> {
   let metadata = { ...existing };
+  if (input.outcome && input.outcome.status !== "published") {
+    // A request that published nothing must not carry any result card.
+    delete metadata.generation;
+    delete metadata.packGeneration;
+    return { ...metadata, generationOutcome: input.outcome };
+  }
   if (input.generation) metadata = { ...metadata, generation: input.generation };
   if (input.packGeneration) metadata = { ...metadata, packGeneration: input.packGeneration };
+  if (input.outcome) metadata = { ...metadata, generationOutcome: input.outcome };
   return metadata;
+}
+
+/** Explicit outcome for one finished provider request. */
+export function generationOutcome(input: {
+  requestId: string;
+  command?: SpriteSlashCommand;
+  generationFailed: boolean;
+  ordered: Asset[];
+  generatedPack?: AssetPack;
+  rejectedStaticAnimation: boolean;
+}): GenerationOutcomeMetadata {
+  const status: GenerationOutcomeStatus = input.generationFailed
+    ? "failed"
+    : input.command === "pack"
+      ? (input.generatedPack ? "published" : "unpublished")
+      : input.rejectedStaticAnimation
+        ? "failed"
+        : input.ordered.length
+          ? "published"
+          : input.command === "rig" ? "none" : "unpublished";
+  return { kind: "generation-outcome", requestId: input.requestId, status };
+}
+
+/** The assistant message created for this request, never an older turn. */
+export function requestAssistantMessage(messages: Message[], request: Pick<ActiveChatRequest, "assistantMessageId">): Message | undefined {
+  if (request.assistantMessageId) return messages.find(message => message.id === request.assistantMessageId);
+  return messages.findLast(message => message.role === "assistant" && message.status === "completed");
 }
 
 /** Which studio tab should open after a completed generation. */
@@ -379,7 +424,7 @@ export function buildMotionPrompt(
     ? `${profile.frames} frames`
     : `between ${profile.minFrames} and ${profile.maxFrames} frames, choosing the smallest mechanically complete count`;
   const finishInstruction = polishModeInstruction(polishMode);
-  return `/animate Use ${asset.relativePath} as the exact source master. Motion: ${motion}. Plan a repeatable ${frameBudget} loop at ${profile.fps} FPS. ${finishInstruction} Preserve the source anatomy, markings, palette, proportions, facing direction, pivot, and ground line. Keep near/far limb identity and layer order stable through crossings, preview at least three cycles, save the rig and playback manifest, and run native quality analysis before reporting success.`;
+  return `/animate Use ${asset.relativePath} as the exact source master. Motion: ${motion}. Plan a repeatable ${frameBudget} loop at ${profile.fps} FPS. ${finishInstruction} Preserve the source anatomy, markings, palette, proportions, facing direction, pivot, and ground line. Keep near/far limb identity and layer order stable through crossings, validate the loop headlessly with the rig validator and a contact sheet (never a browser or interactive preview), save the rig and playback manifest, and once the bounded repair budget is spent publish the best structurally valid result with GENERATION_WARNING.`;
 }
 
 /** Chat prompt for an experimental full redraw after deterministic rig frames exist. */

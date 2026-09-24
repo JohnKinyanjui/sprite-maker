@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
-  appendAssistantDelta, applyAnimationPolishModeToPrompt, buildFullRedrawPrompt, buildMotionPrompt, chatActivityLines, clearConversationRunningRequest, clearRunningRequest, generationViewHandoff, inferChatCommand,
+  appendAssistantDelta, applyAnimationPolishModeToPrompt, buildFullRedrawPrompt, buildMotionPrompt, chatActivityLines, clearConversationRunningRequest, clearRunningRequest, generationOutcome, generationViewHandoff, inferChatCommand,
   isFreshGenerationManifest, isRejectedStaticAnimation, mergeAssistantGenerationMetadata, orderedGenerationAssets,
-  parallelGenerationsInWorkspace, spriteCardForOrderedAssets, stripFrameSuffix, unacceptedGenerationNotice,
+  parallelGenerationsInWorkspace, requestAssistantMessage, spriteCardForOrderedAssets, stripFrameSuffix, unacceptedGenerationNotice,
 } from "../src/lib/chat-generation-finalize";
 import { normalizeGenerationProfile } from "../src/lib/generation-profiles";
 import type { Asset, Message } from "../src/lib/types";
@@ -95,6 +95,42 @@ describe("chat generation finalize", () => {
     expect(prompt).toContain("/animate Use assets/hero.png");
     expect(prompt).toContain("8 frames");
     expect(prompt).toContain("Polish mode: Rig only");
+    expect(prompt).toContain("validate the loop headlessly");
+    expect(prompt).not.toContain("preview at least three cycles");
+  });
+
+  describe("explicit request outcome", () => {
+    const base = { requestId: "req", generationFailed: false, ordered: [] as Asset[], rejectedStaticAnimation: false };
+
+    test("classifies what the current request actually published", () => {
+      expect(generationOutcome({ ...base, ordered: [asset("a1", "run_01"), asset("a2", "run_02")] }).status).toBe("published");
+      expect(generationOutcome(base).status).toBe("unpublished");
+      expect(generationOutcome({ ...base, generationFailed: true, ordered: [asset("a1", "run_01")] }).status).toBe("failed");
+      expect(generationOutcome({ ...base, command: "animate", rejectedStaticAnimation: true }).status).toBe("failed");
+      expect(generationOutcome({ ...base, command: "rig" }).status).toBe("none");
+      expect(generationOutcome({ ...base, command: "pack" }).status).toBe("unpublished");
+      expect(generationOutcome({ ...base, command: "pack", generatedPack: { id: "p", name: "p", description: "", style: "", kind: "pack", files: [], createdAt: "now" } }).status).toBe("published");
+    });
+
+    test("an unpublished outcome strips any result card instead of keeping an old one", () => {
+      const merged = mergeAssistantGenerationMetadata(
+        { generation: { kind: "sprite-generation", name: "cinder-courier-jog-cycle", category: "characters", fps: 10, assetIds: ["old"] }, other: 1 },
+        { outcome: { kind: "generation-outcome", requestId: "req", status: "unpublished" } },
+      );
+      expect(merged.generation).toBeUndefined();
+      expect(merged.other).toBe(1);
+      expect(merged.generationOutcome).toEqual({ kind: "generation-outcome", requestId: "req", status: "unpublished" });
+    });
+
+    test("attaches results to the request's own message, not the latest completed turn", () => {
+      const turn = (id: string, status: Message["status"]): Message => ({
+        id, conversationId: "chat", role: "assistant", kind: "text", content: "", status, metadata: {}, createdAt: "now",
+      });
+      const messages = [turn("older-success", "completed"), turn("current", "failed")];
+      expect(requestAssistantMessage(messages, { assistantMessageId: "current" })?.id).toBe("current");
+      expect(requestAssistantMessage(messages, { assistantMessageId: "missing" })).toBeUndefined();
+      expect(requestAssistantMessage(messages, {})?.id).toBe("older-success");
+    });
   });
 
   test("merges sprite and pack cards onto assistant metadata without dropping either", () => {

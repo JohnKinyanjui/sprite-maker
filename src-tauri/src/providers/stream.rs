@@ -305,6 +305,27 @@ pub(crate) fn response_reports_generation_failure(response: &str) -> bool {
         || lower.contains("withdrawing the candidate")
         || (lower.contains("did not pass the final visual acceptance gate")
             && lower.contains("restor"))
+        || reports_withheld_publication(&lower)
+}
+
+/// Agents sometimes withhold a finished candidate without the explicit
+/// `GENERATION_FAILED:` marker ("marked the result unpublished"). That is a
+/// failure of the current request, never a completion. Keep in sync with
+/// `reportsGenerationFailure` in `src/lib/message-generations.ts`.
+fn reports_withheld_publication(lower: &str) -> bool {
+    [
+        "unpublished",
+        "not published",
+        "not been published",
+        "did not publish",
+        "didn't publish",
+        "could not publish",
+        "couldn't publish",
+        "cannot publish",
+        "can't publish",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
 }
 
 pub(crate) fn cursor_path_detail(path: &str) -> String {
